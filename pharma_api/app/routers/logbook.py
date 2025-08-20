@@ -8,7 +8,7 @@ router = APIRouter(prefix="/pharmacies/{pid}/logbook", tags=["logbook"], depende
 
 @router.get("", response_model=List[CoverageRow])
 def logbook(pid: int, from_: str = Query(..., alias="from"), to: str = Query(..., alias="to"),
-            missingOnly: bool = True):
+            missingOnly: bool = False):
     where = [
         "pharmacy_id = %s",
         "business_date BETWEEN %s AND %s",
