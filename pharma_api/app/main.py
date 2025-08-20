@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import orjson
 from .config import settings, CORS_ORIGINS, CORS_METHODS, CORS_HEADERS
 from .routers import pharmacies, days, stock, agg, logbook, products
+from .routers import usage
 
 class ORJSONResponse:
     media_type = "application/json"
@@ -35,3 +36,4 @@ app.include_router(stock.router)
 app.include_router(agg.router)
 app.include_router(logbook.router)
 app.include_router(products.router)
+app.include_router(usage.router)

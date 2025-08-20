@@ -57,3 +57,14 @@ class CoverageRow(BaseModel):
     phm080_scripts: bool
     stk260_gp: bool
     last_updated: Optional[datetime] = None
+
+class ProductUsage(BaseModel):
+    product_code: str
+    description: Optional[str] = None
+    avg_qty_30d: Optional[float] = None
+    avg_qty_90d: Optional[float] = None
+    avg_qty_180d: Optional[float] = None
+    last_recalc: Optional[datetime] = None
+
+class ProductUsagePage(BaseModel):
+    items: List[ProductUsage]
