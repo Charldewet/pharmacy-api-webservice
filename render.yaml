@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: pharmacy-api-webservice
+    env: python
+    plan: starter
+    buildCommand: pip install -r pharma_api/requirements.txt
+    startCommand: cd pharma_api && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: PORT
+        value: 8000
+    healthCheckPath: /health
+    autoDeploy: true 
