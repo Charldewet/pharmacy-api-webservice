@@ -7,6 +7,19 @@ from pydantic import BaseModel
 
 router = APIRouter(prefix="/products", tags=["products"], dependencies=[Depends(require_api_key)])
 
+class ProductInfo(BaseModel):
+    product_code: str
+    description: str
+    department_code: Optional[str] = None
+    department_name: Optional[str] = None
+
+class ProductSearchResponse(BaseModel):
+    items: List[ProductInfo]
+    total_count: int
+    page: int
+    page_size: int
+    has_more: bool
+
 class ProductSales(BaseModel):
     product_code: str
     description: str
@@ -28,6 +41,106 @@ class ProductSalesResponse(BaseModel):
     date_range: str
     summary: ProductSales
     daily_breakdown: List[dict]
+
+@router.get("/search", response_model=ProductSearchResponse)
+def search_products(
+    query: str = Query(..., description="Search term (product code or description)"),
+    pharmacy_id: int = Query(1, description="Pharmacy ID (default: 1)"),
+    page: int = Query(1, ge=1, description="Page number (default: 1)"),
+    page_size: int = Query(50, ge=1, le=200, description="Items per page (default: 50, max: 200)")
+):
+    """
+    Search for products by product code or description.
+    Returns paginated results with basic product information.
+    """
+    offset = (page - 1) * page_size
+    
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Search query - look for matches in product code or description
+            search_sql = """
+                SELECT 
+                    p.product_code,
+                    p.description,
+                    d.department_code,
+                    d.department_name
+                FROM pharma.products p
+                LEFT JOIN pharma.departments d ON d.department_id = p.department_id
+                WHERE p.product_code ILIKE %s OR p.description ILIKE %s
+                ORDER BY 
+                    CASE 
+                        WHEN p.product_code ILIKE %s THEN 1
+                        WHEN p.description ILIKE %s THEN 2
+                        ELSE 3
+                    END,
+                    p.product_code
+                LIMIT %s OFFSET %s
+            """
+            
+            # Count total matches for pagination
+            count_sql = """
+                SELECT COUNT(*) as total
+                FROM pharma.products p
+                WHERE p.product_code ILIKE %s OR p.description ILIKE %s
+            """
+            
+            search_pattern = f"%{query}%"
+            exact_pattern = query
+            
+            # Get total count
+            cur.execute(count_sql, (search_pattern, search_pattern))
+            total_count = cur.fetchone()['total']
+            
+            # Get paginated results
+            cur.execute(search_sql, (search_pattern, search_pattern, exact_pattern, exact_pattern, page_size, offset))
+            rows = cur.fetchall()
+            
+            # Check if there are more pages
+            has_more = (offset + page_size) < total_count
+            
+            return ProductSearchResponse(
+                items=rows,
+                total_count=total_count,
+                page=page,
+                page_size=page_size,
+                has_more=has_more
+            )
+
+@router.get("/{product_code}", response_model=ProductInfo)
+def get_product_info(
+    product_code: str,
+    pharmacy_id: int = Query(1, description="Pharmacy ID (default: 1)")
+):
+    """
+    Get basic information for a specific product by product code.
+    Returns product details without requiring a date range.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT 
+                    p.product_code,
+                    p.description,
+                    d.department_code,
+                    d.department_name
+                FROM pharma.products p
+                LEFT JOIN pharma.departments d ON d.department_id = p.department_id
+                WHERE p.product_code = %s
+            """, (product_code,))
+            
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Product {product_code} not found"
+                )
+            
+            return ProductInfo(
+                product_code=row['product_code'],
+                description=row['description'],
+                department_code=row['department_code'],
+                department_name=row['department_name']
+            )
 
 @router.get("/{product_code}/sales", response_model=ProductSalesResponse)
 def get_product_sales(

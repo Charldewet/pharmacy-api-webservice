@@ -153,6 +153,34 @@ Response: Product performance summary only (no daily breakdown)
 Use Case: Quick product overviews, summary dashboards
 ```
 
+### **11. Product Search - Find Products**
+```http
+GET /products/search?query={search_term}&page={page}&page_size={size}&pharmacy_id={id}
+
+# Examples:
+GET /products/search?query=ADCO&page=1&page_size=20
+GET /products/search?query=LP906&page=1&page_size=50
+GET /products/search?query=PARACETAMOL
+
+Response: Paginated list of products matching search term with:
+- product_code, description, department_code, department_name
+- total_count, page, page_size, has_more
+Use Case: Product discovery, search functionality, product lookup
+```
+
+### **12. Product Information - Basic Details**
+```http
+GET /products/{product_code}?pharmacy_id={id}
+
+# Examples:
+GET /products/LP9066287
+GET /products/LP9040024
+
+Response: Basic product information including:
+- product_code, description, department_code, department_name
+Use Case: Product details without requiring date ranges, product lookup
+```
+
 ---
 
 ## 📊 **Reporting & Coverage**
@@ -240,6 +268,38 @@ const getMTD = async (pharmacyId, month, throughDate) => {
 const getProductSales = async (productCode, fromDate, toDate, pharmacyId = 1) => {
   const response = await fetch(
     `https://pharmacy-api-webservice.onrender.com/products/${productCode}/sales?from_date=${fromDate}&to_date=${toDate}&pharmacy_id=${pharmacyId}`,
+    {
+      headers: {
+        'Authorization': `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  );
+  return response.json();
+};
+```
+
+#### **Search for Products:**
+```javascript
+const searchProducts = async (query, page = 1, pageSize = 50, pharmacyId = 1) => {
+  const response = await fetch(
+    `https://pharmacy-api-webservice.onrender.com/products/search?query=${encodeURIComponent(query)}&page=${page}&page_size=${pageSize}&pharmacy_id=${pharmacyId}`,
+    {
+      headers: {
+        'Authorization': `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  );
+  return response.json();
+};
+```
+
+#### **Get Product Information:**
+```javascript
+const getProductInfo = async (productCode, pharmacyId = 1) => {
+  const response = await fetch(
+    `https://pharmacy-api-webservice.onrender.com/products/${productCode}?pharmacy_id=${pharmacyId}`,
     {
       headers: {
         'Authorization': `Bearer ${API_KEY}`,
