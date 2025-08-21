@@ -26,14 +26,19 @@ def read_text(pdf_path: Path) -> str:
 
 
 def parse_number(s: str) -> Optional[float]:
-    """Parse numeric token like '1,234.56' or '(123.45)' or '-12.3' → float."""
+    """Parse numeric token like '1,234.56' or '(123.45)' or '-12.3' or '12.3-' → float."""
     if not s:
         return None
     s = s.strip()
     neg = False
+    # Parentheses indicate negative
     if s.startswith("(") and s.endswith(")"):
         neg = True
         s = s[1:-1]
+    # Trailing minus (e.g. '2.000-') indicates negative
+    if s.endswith("-"):
+        neg = True
+        s = s[:-1]
     s = s.replace(",", "")
     m = re.search(r"-?\d+(?:\.\d+)?", s)
     if not m:
@@ -127,28 +132,41 @@ def parse_line(line: str) -> Optional[Dict[str, Any]]:
     # Tail after product code
     tail = line[mp.end():].strip()
 
-    # Collect numeric tokens at the end of the line
-    nums = NUM_RE.findall(tail)
-    # We need at least sales_qty..gp_pct → 5 tokens minimum to be useful
-    if len(nums) < 5:
-        return None
+    # Collect numeric tokens strictly from the right (trailing block only)
+    tokens_from_right: List[str] = []
+    rest = tail.rstrip()
+    # Pattern for a numeric token (with commas/decimals, parentheses, or trailing minus)
+    num_tail_re = re.compile(r"(-?\(?\d{1,3}(?:,\d{3})*(?:\.\d+)?\)?-?|-?\d+(?:\.\d+)?-?)\s*[^0-9]*$")
+    while True:
+        m = num_tail_re.search(rest)
+        if not m:
+            break
+        tokens_from_right.append(m.group(1))
+        # Trim the matched token and any spaces/punct after it
+        rest = re.sub(r"\s*" + re.escape(m.group(1)) + r"\s*[^0-9]*$", "", rest)
+        if not rest or len(tokens_from_right) >= 7:
+            break
 
-    # The description is what's left after removing the trailing numeric tokens
-    desc_part = tail
-    for tok in reversed(nums):
-        desc_part = re.sub(r"\s*" + re.escape(tok) + r"\s*$", "", desc_part, count=1)
-    description = desc_part.strip(" -:\t")
-    if not description:
+    # We need at least sales_qty..gp_pct → 5 tokens minimum to be useful
+    if len(tokens_from_right) < 5:
         return None
 
     # Map trailing numbers from the RIGHT; keep only the last 7 max
-    tokens = nums[-7:]
+    tokens = list(reversed(tokens_from_right))[-7:]
     values = [parse_number(t) for t in tokens]
     # Left-pad to 7 positions
     while len(values) < 7:
         values.insert(0, None)
 
     on_hand, sales_qty, sales_value, cost_of_sales, gross_profit, turnover_pct, gp_pct = values
+
+    # The description is what's left after removing the trailing numeric tokens
+    desc_part = tail
+    for tok in tokens_from_right:
+        desc_part = re.sub(r"\s*" + re.escape(tok) + r"\s*$", "", desc_part, count=1)
+    description = desc_part.strip(" -:\t")
+    if not description:
+        return None
 
     return {
         "dept_code": dept_code,
