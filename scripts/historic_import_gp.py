@@ -289,6 +289,48 @@ def rows_from_rec(rec: Dict[str, Any]) -> Iterable[Tuple]:
         yield (pid, bdt, dept_code, product_code, description,
                qty_sold, sales_val, cost_of_sales, gp_value, gp_pct, on_hand)
 
+def refresh_all_product_usage(conn) -> None:
+    sql = """
+WITH product_sales AS (
+  SELECT 
+    f.pharmacy_id,
+    f.product_id,
+    COUNT(DISTINCT f.business_date) as days_with_sales,
+    SUM(CASE WHEN f.business_date >= CURRENT_DATE - INTERVAL '29 days'  THEN f.qty_sold END) as qty_30d,
+    SUM(CASE WHEN f.business_date >= CURRENT_DATE - INTERVAL '89 days'  THEN f.qty_sold END) as qty_90d,
+    SUM(CASE WHEN f.business_date >= CURRENT_DATE - INTERVAL '179 days' THEN f.qty_sold END) as qty_180d
+  FROM pharma.fact_stock_activity f
+  WHERE f.business_date >= CURRENT_DATE - INTERVAL '179 days'
+  GROUP BY f.pharmacy_id, f.product_id
+),
+usage_calc AS (
+  SELECT 
+    ps.pharmacy_id,
+    ps.product_id,
+    CASE WHEN ps.days_with_sales >= 1 THEN ROUND((COALESCE(ps.qty_30d,0) / 30.0)::numeric, 3) ELSE 0 END as avg_qty_30d,
+    CASE WHEN ps.days_with_sales >= 1 THEN ROUND((COALESCE(ps.qty_90d,0) / 90.0)::numeric, 3) ELSE 0 END as avg_qty_90d,
+    CASE WHEN ps.days_with_sales >= 1 THEN ROUND((COALESCE(ps.qty_180d,0) / 180.0)::numeric, 3) ELSE 0 END as avg_qty_180d
+  FROM product_sales ps
+)
+INSERT INTO pharma.product_usage AS u (
+  pharmacy_id, product_id, avg_qty_30d, avg_qty_90d, avg_qty_180d, last_recalc
+)
+SELECT 
+  uc.pharmacy_id, uc.product_id, 
+  uc.avg_qty_30d, uc.avg_qty_90d, uc.avg_qty_180d, 
+  now()
+FROM usage_calc uc
+ON CONFLICT (pharmacy_id, product_id) DO UPDATE
+SET 
+  avg_qty_30d = EXCLUDED.avg_qty_30d,
+  avg_qty_90d = EXCLUDED.avg_qty_90d,
+  avg_qty_180d = EXCLUDED.avg_qty_180d,
+  last_recalc = now();
+"""
+    with conn.cursor() as cur:
+        cur.execute("SET LOCAL statement_timeout = 0;")
+        cur.execute(sql)
+
 # ====== CLI args
 def parse_args():
     ap = argparse.ArgumentParser(description="Historical backfill for GP (gross_profit) reports only.")
@@ -412,6 +454,9 @@ def main():
                 }
                 cur.execute(INSERT_RECEIPT, params)
                 cur.execute(UPSERT_COVERAGE_GP, params)
+
+        # Refresh product usage after GP replace-day
+        refresh_all_product_usage(conn)
 
         conn.commit()
 
