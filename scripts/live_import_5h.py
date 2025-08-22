@@ -21,8 +21,8 @@ if str(ROOT) not in sys.path:
 load_dotenv(find_dotenv(), override=False)
 
 DSN = os.environ.get("DATABASE_URL")
-IMAP_USER = os.environ.get("GMAIL_USER")
-IMAP_PASS = os.environ.get("GMAIL_PASSWORD")
+IMAP_USER = os.environ.get("REITZ_GMAIL_USERNAME")
+IMAP_PASS = os.environ.get("REITZ_GMAIL_APP_PASSWORD")
 IMAP_FOLDER = os.environ.get("IMAP_FOLDER", "INBOX")
 GMAIL_LABEL = os.environ.get("GMAIL_LABEL")
 LOOKBACK_HOURS = int(os.environ.get("LOOKBACK_HOURS", "5"))
@@ -40,6 +40,11 @@ if not IMAP_PASS:
     sys.exit(1)
 
 print(f"Starting live import with user: {IMAP_USER}, label: {GMAIL_LABEL}, lookback: {LOOKBACK_HOURS}h")
+
+# Add heartbeat timestamp
+current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+print(f"HEARTBEAT: Live import script started at {current_time}")
+print(f"HEARTBEAT: Environment check - DB: {'✓' if DSN else '✗'}, Gmail: {'✓' if IMAP_USER and IMAP_PASS else '✗'}")
 
 # ---- Import your existing parsers & classifier
 from src.classify import classify_file
@@ -647,6 +652,10 @@ def run_live_import(verbose: bool = True):
             print("[live] aggregates refreshed: nothing to do (no daily rows touched).")
 
     print(f"[live] Done in {time.time()-t0:.2f}s")
+    
+    # Completion heartbeat
+    completion_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"HEARTBEAT: Live import completed at {completion_time}")
 
 if __name__ == "__main__":
     run_live_import(verbose=True)

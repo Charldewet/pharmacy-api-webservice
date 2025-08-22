@@ -22,5 +22,5 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
-    schedule: "*/30 * * * *"
+    schedule: "*/5 * * * *"
     autoDeploy: true 
