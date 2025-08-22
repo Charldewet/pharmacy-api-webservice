@@ -13,8 +13,8 @@ services:
     healthCheckPath: /health
     autoDeploy: true
 
-  - type: worker
-    name: pharmacy-live-import-worker
+  - type: cron
+    name: pharmacy-live-import-cron
     env: python
     plan: starter
     buildCommand: pip install -r requirements.txt
@@ -22,5 +22,5 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
-    cron: "*/30 * * * *"
+    schedule: "*/30 * * * *"
     autoDeploy: true 
