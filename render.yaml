@@ -11,4 +11,16 @@ services:
       - key: PORT
         value: 8000
     healthCheckPath: /health
+    autoDeploy: true
+
+  - type: worker
+    name: pharmacy-live-import-worker
+    env: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python scripts/live_import_5h.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+    cron: "*/30 * * * *"
     autoDeploy: true 
