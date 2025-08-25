@@ -179,6 +179,7 @@ Key = Tuple[int, str, str]  # (pharmacy_id, business_date, report_type)
 def latest_per_key(atts: List[AttachmentRec]) -> Dict[Key, Tuple[AttachmentRec, Dict[str, Any]]]:
     """
     Parse all attachments, keep only the latest (by received_at) per (pharmacy_id, business_date, report_type).
+    If timestamps are equal, prefer the one with higher values (never discard newer data).
     """
     chosen: Dict[Key, Tuple[AttachmentRec, Dict[str, Any]]] = {}
     for att in atts:
@@ -192,8 +193,30 @@ def latest_per_key(atts: List[AttachmentRec]) -> Dict[Key, Tuple[AttachmentRec, 
             continue
         key: Key = (int(pid), str(bdt), str(rtype))
         cur = chosen.get(key)
-        if (cur is None) or (att.received_at > cur[0].received_at):
+        
+        # Always prefer newer timestamp
+        if cur is None:
             chosen[key] = (att, rec)
+        elif att.received_at > cur[0].received_at:
+            chosen[key] = (att, rec)
+        elif att.received_at == cur[0].received_at:
+            # Same timestamp - prefer the one with higher values to avoid discarding newer data
+            # For GP reports, prefer the one with more lines (more complete data)
+            if rtype == "gross_profit":
+                cur_lines = len(cur[1].get("lines", []))
+                new_lines = len(rec.get("lines", []))
+                if new_lines > cur_lines:
+                    chosen[key] = (att, rec)
+                    print(f"[live] Same timestamp for {rtype} on {bdt}, preferring report with {new_lines} lines over {cur_lines}")
+            # For other reports, prefer the one with higher values
+            else:
+                # Compare key metrics and prefer higher values
+                cur_turnover = cur[1].get("turnover", 0) or 0
+                new_turnover = rec.get("turnover", 0) or 0
+                if new_turnover > cur_turnover:
+                    chosen[key] = (att, rec)
+                    print(f"[live] Same timestamp for {rtype} on {bdt}, preferring report with turnover {new_turnover} over {cur_turnover}")
+    
     return chosen
 
 # =========================
@@ -594,6 +617,10 @@ def run_live_import(verbose: bool = True):
     latest = latest_per_key(atts)
     if verbose:
         print(f"[live] unique latest keys: {len(latest)}")
+        # Debug: Show which reports were selected
+        for key, (att, rec) in latest.items():
+            pid, bdt, rtype = key
+            print(f"[live] Selected: {rtype} for pharmacy {pid} on {bdt} - received at {att.received_at}, filename: {att.filename}")
 
     # Track which (pharmacy_id, date) were updated in fact_daily_sales
     touched_days: set[Tuple[int, str]] = set()
