@@ -47,7 +47,7 @@ print(f"HEARTBEAT: Live import script started at {current_time}")
 print(f"HEARTBEAT: Environment check - DB: {'✓' if DSN else '✗'}, Gmail: {'✓' if IMAP_USER and IMAP_PASS else '✗'}")
 
 # ---- Import your existing parsers & classifier
-from src.classify import classify_file
+from src.classify import classify_file, classify_email_subject
 from src.parsers.turnover import parse_turnover_summary
 from src.parsers.trading_account import parse_trading_account
 from src.parsers.scripts import parse_scripts
@@ -73,6 +73,9 @@ class AttachmentRec:
     filename: str
     data: bytes
     sha256: str
+    subject: str  # Email subject for classification
+    pharmacy_id: Optional[int] = None  # Pre-classified pharmacy ID
+    pharmacy_name: Optional[str] = None  # Pre-classified pharmacy name
 
 def fetch_recent_attachments(label: Optional[str], lookback_hours: int, max_messages: int) -> List[AttachmentRec]:
     """
@@ -133,13 +136,26 @@ def fetch_recent_attachments(label: Optional[str], lookback_hours: int, max_mess
                         continue
                     msg = message_from_bytes(msg_bytes)
                     received = meta[uid][b"INTERNALDATE"].astimezone(timezone.utc)
+                    
+                    # Pre-classify by email subject
+                    subject = msg.get("subject", "")
+                    pharmacy_info = classify_email_subject(subject)
+                    pharmacy_id = pharmacy_info[0].value if pharmacy_info else None
+                    pharmacy_name = pharmacy_info[1] if pharmacy_info else None
+                    
+                    if pharmacy_id:
+                        print(f"[live] Email subject classified: {pharmacy_name} (ID: {pharmacy_id}) from subject: {subject[:50]}...")
+                    
                     for part in msg.walk():
-                        cd = (part.get_content_disposition() or "").lower()  # 'attachment', 'inline', or ''
+                        cd = (part.get_content_disposition() or "").lower()  # 'attachment', 'attachment', 'inline', or ''
                         if is_pdf_part(part) and cd in ("attachment", "inline", ""):
                             payload = part.get_payload(decode=True)
                             fn = part.get_filename() or "attachment.pdf"
                             if payload:
-                                out.append(AttachmentRec(uid, received, fn, payload, sha256_bytes(payload)))
+                                out.append(AttachmentRec(
+                                    uid, received, fn, payload, sha256_bytes(payload),
+                                    subject, pharmacy_id, pharmacy_name
+                                ))
                                 found_here += 1
 
                 print(f"[live] attachments pulled from folder={folder} label={label_try!r}: {found_here}")
@@ -180,17 +196,27 @@ def latest_per_key(atts: List[AttachmentRec]) -> Dict[Key, Tuple[AttachmentRec, 
     """
     Parse all attachments, keep only the latest (by received_at) per (pharmacy_id, business_date, report_type).
     If timestamps are equal, prefer the one with higher values (never discard newer data).
+    Uses pre-classified pharmacy info from email subjects when available.
     """
     chosen: Dict[Key, Tuple[AttachmentRec, Dict[str, Any]]] = {}
     for att in atts:
         rec = classify_and_parse_bytes(att.filename, att.data)
         if rec.get("status") != "parsed":
             continue
-        pid = rec.get("pharmacy_id")
+        
+        # Use pre-classified pharmacy info from email subject if available
+        pid = att.pharmacy_id or rec.get("pharmacy_id")
         bdt = biz_date(rec)
         rtype = rec.get("report_type")
+        
         if not (pid and bdt and rtype):
             continue
+            
+        # Override pharmacy_id in parsed record with email subject classification
+        if att.pharmacy_id and att.pharmacy_id != rec.get("pharmacy_id"):
+            print(f"[live] Overriding PDF pharmacy_id {rec.get('pharmacy_id')} with email subject pharmacy_id {att.pharmacy_id}")
+            rec["pharmacy_id"] = att.pharmacy_id
+            
         key: Key = (int(pid), str(bdt), str(rtype))
         cur = chosen.get(key)
         

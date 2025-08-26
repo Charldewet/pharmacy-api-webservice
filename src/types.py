@@ -10,3 +10,5 @@ class PharmacyId(int, Enum):
     REITZ = 1
     WINTERTON = 2
     ROOS = 3
+    VILLIERS = 4
+    TUGELA = 5

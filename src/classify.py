@@ -11,6 +11,30 @@ from .types import ReportType, PharmacyId
 
 
 # ----------------------------
+# Email Subject Classification
+# ----------------------------
+EMAIL_PHARMACY_PATTERNS: Tuple[Tuple[PharmacyId, str, str], ...] = (
+    # (id, canonical_name, subject_pattern)
+    (PharmacyId.REITZ,     "REITZ APTEEK",            r"REITZ\s+PHARMACY"),
+    (PharmacyId.WINTERTON, "TLC PHARMACY WINTERTON",  r"TLC\s+WINTERTON\s+PHARMACY"),
+    (PharmacyId.ROOS,      "ROOS PHARMACY",           r"ROOS\s+PHARMACY"),
+    (PharmacyId.VILLIERS,  "TLC VILLIERS PHARMACY",   r"TLC\s+VILLIERS\s+PHARMACY"),
+    (PharmacyId.TUGELA,    "TLC TUGELA PHARMACY",     r"TLC\s+TUGELA\s+PHARMACY"),
+)
+
+def classify_email_subject(subject: str) -> Optional[Tuple[PharmacyId, str]]:
+    """
+    Classify pharmacy from email subject line.
+    More reliable than PDF content parsing.
+    """
+    subject_upper = subject.upper()
+    for pid, canonical, pat in EMAIL_PHARMACY_PATTERNS:
+        if re.search(pat, subject_upper, re.I):
+            return pid, canonical
+    return None
+
+
+# ----------------------------
 # Fast PDF head reader
 # ----------------------------
 def read_head(pdf_path: Path, pages: int = 2, max_chars: int = 8000) -> str:
