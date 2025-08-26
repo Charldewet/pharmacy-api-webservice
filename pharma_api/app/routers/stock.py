@@ -71,3 +71,22 @@ def stock_activity_worst_gp(pid: int, date: str, limit: int = Query(50, ge=1, le
         cur.execute(sql, (pid, date, limit))
         rows = cur.fetchall()
     return {"items": rows, "nextCursor": None}
+
+@router.get("/negative-soh", response_model=StockPage)
+def stock_activity_negative_soh(pid: int, date: str, limit: int = Query(50, ge=1, le=200)):
+    """Return items where on_hand < 0 for the given day, ordered by most negative."""
+    sql = """
+    SELECT d.department_code, pr.product_code, pr.description,
+           f.qty_sold, f.sales_val, f.cost_of_sales, f.gp_value, f.gp_pct, f.on_hand,
+           f.product_id
+    FROM pharma.fact_stock_activity f
+    JOIN pharma.products pr ON pr.product_id = f.product_id
+    LEFT JOIN pharma.departments d ON d.department_id = f.department_id
+    WHERE f.pharmacy_id = %s AND f.business_date = %s AND f.on_hand < 0
+    ORDER BY f.on_hand ASC, f.product_id
+    LIMIT %s
+    """
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, (pid, date, limit))
+        rows = cur.fetchall()
+    return {"items": rows, "nextCursor": None}
