@@ -9,3 +9,4 @@ class ReportType(str, Enum):
 class PharmacyId(int, Enum):
     REITZ = 1
     WINTERTON = 2
+    ROOS = 3

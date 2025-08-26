@@ -76,6 +76,7 @@ PHARMACY_PATTERNS: Tuple[Tuple[PharmacyId, str, str], ...] = (
     # (id, canonical_name, regex)
     (PharmacyId.REITZ,     "REITZ APTEEK",            r"\bREITZ\s+APTEEK\b"),
     (PharmacyId.WINTERTON, "TLC PHARMACY WINTERTON",  r"\bTLC\s+PHARMACY\s+WINTERTO(?:N)?\b"),
+    (PharmacyId.ROOS,      "THE LOCAL CHOICE PHARMACY ROOS", r"\bTHE\s+LOCAL\s+CHOICE\s+PHARMACY\b"),
 )
 
 def detect_pharmacy(text_head: str) -> Optional[Tuple[PharmacyId, str]]:
