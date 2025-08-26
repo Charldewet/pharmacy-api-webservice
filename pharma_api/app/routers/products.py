@@ -156,43 +156,80 @@ def get_product_sales(
     with get_conn() as conn:
         with conn.cursor() as cur:
             # Get product details and summary
-            cur.execute("""
-                SELECT 
-                    pr.product_code,
-                    pr.description,
-                    d.department_code,
-                    SUM(f.qty_sold) as total_qty_sold,
-                    SUM(f.sales_val) as total_sales_value,
-                    SUM(f.cost_of_sales) as total_cost_of_sales,
-                    SUM(f.gp_value) as total_gp_value,
-                    CASE 
-                        WHEN SUM(f.sales_val) > 0 THEN 
-                            (SUM(f.gp_value) / SUM(f.sales_val)) * 100
-                        ELSE 0 
-                    END as avg_gp_percentage,
-                    CASE 
-                        WHEN SUM(f.qty_sold) > 0 THEN 
-                            SUM(f.sales_val) / SUM(f.qty_sold)
-                        ELSE 0 
-                    END as avg_unit_price,
-                    CASE 
-                        WHEN SUM(f.qty_sold) > 0 THEN 
-                            SUM(f.cost_of_sales) / SUM(f.qty_sold)
-                        ELSE 0 
-                    END as avg_unit_cost,
-                    COUNT(DISTINCT f.business_date) as sales_days,
-                    MIN(f.business_date) as first_sale_date,
-                    MAX(f.business_date) as last_sale_date
-                FROM pharma.fact_stock_activity f
-                JOIN pharma.products pr ON pr.product_id = f.product_id
-                LEFT JOIN pharma.departments d ON d.department_id = f.department_id
-                WHERE f.pharmacy_id = %s 
-                AND pr.product_code = %s
-                AND f.business_date BETWEEN %s AND %s
-                AND f.qty_sold > 0
-                GROUP BY pr.product_code, pr.description, d.department_code
-            """, (pharmacy_id, product_code, from_date, to_date))
-            
+            if pharmacy_id == 100:
+                summary_sql = """
+                    SELECT 
+                        f.product_code,
+                        f.description,
+                        f.department_code,
+                        SUM(f.qty_sold) as total_qty_sold,
+                        SUM(f.sales_val) as total_sales_value,
+                        SUM(f.cost_of_sales) as total_cost_of_sales,
+                        SUM(f.gp_value) as total_gp_value,
+                        CASE 
+                            WHEN SUM(f.sales_val) > 0 THEN 
+                                (SUM(f.gp_value) / SUM(f.sales_val)) * 100
+                            ELSE 0 
+                        END as avg_gp_percentage,
+                        CASE 
+                            WHEN SUM(f.qty_sold) > 0 THEN 
+                                SUM(f.sales_val) / SUM(f.qty_sold)
+                            ELSE 0 
+                        END as avg_unit_price,
+                        CASE 
+                            WHEN SUM(f.qty_sold) > 0 THEN 
+                                SUM(f.cost_of_sales) / SUM(f.qty_sold)
+                            ELSE 0 
+                        END as avg_unit_cost,
+                        COUNT(DISTINCT f.business_date) as sales_days,
+                        MIN(f.business_date) as first_sale_date,
+                        MAX(f.business_date) as last_sale_date
+                    FROM pharma.v_stock_activity_group f
+                    WHERE f.product_code = %s
+                    AND f.business_date BETWEEN %s AND %s
+                    AND f.qty_sold > 0
+                    GROUP BY f.product_code, f.description, f.department_code
+                """
+                summary_params = (product_code, from_date, to_date)
+            else:
+                summary_sql = """
+                    SELECT 
+                        pr.product_code,
+                        pr.description,
+                        d.department_code,
+                        SUM(f.qty_sold) as total_qty_sold,
+                        SUM(f.sales_val) as total_sales_value,
+                        SUM(f.cost_of_sales) as total_cost_of_sales,
+                        SUM(f.gp_value) as total_gp_value,
+                        CASE 
+                            WHEN SUM(f.sales_val) > 0 THEN 
+                                (SUM(f.gp_value) / SUM(f.sales_val)) * 100
+                            ELSE 0 
+                        END as avg_gp_percentage,
+                        CASE 
+                            WHEN SUM(f.qty_sold) > 0 THEN 
+                                SUM(f.sales_val) / SUM(f.qty_sold)
+                            ELSE 0 
+                        END as avg_unit_price,
+                        CASE 
+                            WHEN SUM(f.qty_sold) > 0 THEN 
+                                SUM(f.cost_of_sales) / SUM(f.qty_sold)
+                            ELSE 0 
+                        END as avg_unit_cost,
+                        COUNT(DISTINCT f.business_date) as sales_days,
+                        MIN(f.business_date) as first_sale_date,
+                        MAX(f.business_date) as last_sale_date
+                    FROM pharma.fact_stock_activity f
+                    JOIN pharma.products pr ON pr.product_id = f.product_id
+                    LEFT JOIN pharma.departments d ON d.department_id = f.department_id
+                    WHERE f.pharmacy_id = %s 
+                    AND pr.product_code = %s
+                    AND f.business_date BETWEEN %s AND %s
+                    AND f.qty_sold > 0
+                    GROUP BY pr.product_code, pr.description, d.department_code
+                """
+                summary_params = (pharmacy_id, product_code, from_date, to_date)
+            cur.execute(summary_sql, summary_params)
             summary = cur.fetchone()
             
             if not summary:
@@ -202,27 +239,50 @@ def get_product_sales(
                 )
             
             # Get daily breakdown
-            cur.execute("""
-                SELECT 
-                    f.business_date,
-                    f.qty_sold,
-                    f.sales_val,
-                    f.cost_of_sales,
-                    f.gp_value,
-                    CASE 
-                        WHEN f.sales_val > 0 THEN 
-                            (f.gp_value / f.sales_val) * 100
-                        ELSE 0 
-                    END as gp_percentage
-                FROM pharma.fact_stock_activity f
-                JOIN pharma.products pr ON pr.product_id = f.product_id
-                WHERE f.pharmacy_id = %s 
-                AND pr.product_code = %s
-                AND f.business_date BETWEEN %s AND %s
-                AND f.qty_sold > 0
-                ORDER BY f.business_date
-            """, (pharmacy_id, product_code, from_date, to_date))
-            
+            if pharmacy_id == 100:
+                breakdown_sql = """
+                    SELECT 
+                        f.business_date,
+                        SUM(f.qty_sold) as qty_sold,
+                        SUM(f.sales_val) as sales_val,
+                        SUM(f.cost_of_sales) as cost_of_sales,
+                        SUM(f.gp_value) as gp_value,
+                        CASE 
+                            WHEN SUM(f.sales_val) > 0 THEN 
+                                (SUM(f.gp_value) / SUM(f.sales_val)) * 100
+                            ELSE 0 
+                        END as gp_percentage
+                    FROM pharma.v_stock_activity_group f
+                    WHERE f.product_code = %s
+                    AND f.business_date BETWEEN %s AND %s
+                    AND f.qty_sold > 0
+                    GROUP BY f.business_date
+                    ORDER BY f.business_date
+                """
+                breakdown_params = (product_code, from_date, to_date)
+            else:
+                breakdown_sql = """
+                    SELECT 
+                        f.business_date,
+                        f.qty_sold,
+                        f.sales_val,
+                        f.cost_of_sales,
+                        f.gp_value,
+                        CASE 
+                            WHEN f.sales_val > 0 THEN 
+                                (f.gp_value / f.sales_val) * 100
+                            ELSE 0 
+                        END as gp_percentage
+                    FROM pharma.fact_stock_activity f
+                    JOIN pharma.products pr ON pr.product_id = f.product_id
+                    WHERE f.pharmacy_id = %s 
+                    AND pr.product_code = %s
+                    AND f.business_date BETWEEN %s AND %s
+                    AND f.qty_sold > 0
+                    ORDER BY f.business_date
+                """
+                breakdown_params = (pharmacy_id, product_code, from_date, to_date)
+            cur.execute(breakdown_sql, breakdown_params)
             daily_breakdown = cur.fetchall()
             
             # Format the response
@@ -263,43 +323,80 @@ def get_product_sales_summary(
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT 
-                    pr.product_code,
-                    pr.description,
-                    d.department_code,
-                    SUM(f.qty_sold) as total_qty_sold,
-                    SUM(f.sales_val) as total_sales_value,
-                    SUM(f.cost_of_sales) as total_cost_of_sales,
-                    SUM(f.gp_value) as total_gp_value,
-                    CASE 
-                        WHEN SUM(f.sales_val) > 0 THEN 
-                            (SUM(f.gp_value) / SUM(f.sales_val)) * 100
-                        ELSE 0 
-                    END as avg_gp_percentage,
-                    CASE 
-                        WHEN SUM(f.qty_sold) > 0 THEN 
-                            SUM(f.sales_val) / SUM(f.qty_sold)
-                        ELSE 0 
-                    END as avg_unit_price,
-                    CASE 
-                        WHEN SUM(f.qty_sold) > 0 THEN 
-                            SUM(f.cost_of_sales) / SUM(f.qty_sold)
-                        ELSE 0 
-                    END as avg_unit_cost,
-                    COUNT(DISTINCT f.business_date) as sales_days,
-                    MIN(f.business_date) as first_sale_date,
-                    MAX(f.business_date) as last_sale_date
-                FROM pharma.fact_stock_activity f
-                JOIN pharma.products pr ON pr.product_id = f.product_id
-                LEFT JOIN pharma.departments d ON d.department_id = f.department_id
-                WHERE f.pharmacy_id = %s 
-                AND pr.product_code = %s
-                AND f.business_date BETWEEN %s AND %s
-                AND f.qty_sold > 0
-                GROUP BY pr.product_code, pr.description, d.department_code
-            """, (pharmacy_id, product_code, from_date, to_date))
-            
+            if pharmacy_id == 100:
+                sql = """
+                    SELECT 
+                        f.product_code,
+                        f.description,
+                        f.department_code,
+                        SUM(f.qty_sold) as total_qty_sold,
+                        SUM(f.sales_val) as total_sales_value,
+                        SUM(f.cost_of_sales) as total_cost_of_sales,
+                        SUM(f.gp_value) as total_gp_value,
+                        CASE 
+                            WHEN SUM(f.sales_val) > 0 THEN 
+                                (SUM(f.gp_value) / SUM(f.sales_val)) * 100
+                            ELSE 0 
+                        END as avg_gp_percentage,
+                        CASE 
+                            WHEN SUM(f.qty_sold) > 0 THEN 
+                                SUM(f.sales_val) / SUM(f.qty_sold)
+                            ELSE 0 
+                        END as avg_unit_price,
+                        CASE 
+                            WHEN SUM(f.qty_sold) > 0 THEN 
+                                SUM(f.cost_of_sales) / SUM(f.qty_sold)
+                            ELSE 0 
+                        END as avg_unit_cost,
+                        COUNT(DISTINCT f.business_date) as sales_days,
+                        MIN(f.business_date) as first_sale_date,
+                        MAX(f.business_date) as last_sale_date
+                    FROM pharma.v_stock_activity_group f
+                    WHERE f.product_code = %s
+                    AND f.business_date BETWEEN %s AND %s
+                    AND f.qty_sold > 0
+                    GROUP BY f.product_code, f.description, f.department_code
+                """
+                params = (product_code, from_date, to_date)
+            else:
+                sql = """
+                    SELECT 
+                        pr.product_code,
+                        pr.description,
+                        d.department_code,
+                        SUM(f.qty_sold) as total_qty_sold,
+                        SUM(f.sales_val) as total_sales_value,
+                        SUM(f.cost_of_sales) as total_cost_of_sales,
+                        SUM(f.gp_value) as total_gp_value,
+                        CASE 
+                            WHEN SUM(f.sales_val) > 0 THEN 
+                                (SUM(f.gp_value) / SUM(f.sales_val)) * 100
+                            ELSE 0 
+                        END as avg_gp_percentage,
+                            CASE 
+                            WHEN SUM(f.qty_sold) > 0 THEN 
+                                SUM(f.sales_val) / SUM(f.qty_sold)
+                            ELSE 0 
+                        END as avg_unit_price,
+                        CASE 
+                            WHEN SUM(f.qty_sold) > 0 THEN 
+                                SUM(f.cost_of_sales) / SUM(f.qty_sold)
+                            ELSE 0 
+                        END as avg_unit_cost,
+                        COUNT(DISTINCT f.business_date) as sales_days,
+                        MIN(f.business_date) as first_sale_date,
+                        MAX(f.business_date) as last_sale_date
+                    FROM pharma.fact_stock_activity f
+                    JOIN pharma.products pr ON pr.product_id = f.product_id
+                    LEFT JOIN pharma.departments d ON d.department_id = f.department_id
+                    WHERE f.pharmacy_id = %s 
+                    AND pr.product_code = %s
+                    AND f.business_date BETWEEN %s AND %s
+                    AND f.qty_sold > 0
+                    GROUP BY pr.product_code, pr.description, d.department_code
+                """
+                params = (pharmacy_id, product_code, from_date, to_date)
+            cur.execute(sql, params)
             summary = cur.fetchone()
             
             if not summary:
