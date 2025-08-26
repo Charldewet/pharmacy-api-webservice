@@ -20,13 +20,13 @@ from psycopg.rows import dict_row
 # ====== ENV
 load_dotenv(find_dotenv(), override=False)
 DSN          = os.environ.get("DATABASE_URL")
-IMAP_USER    = os.environ.get("REITZ_GMAIL_USERNAME")
-IMAP_PASS    = os.environ.get("REITZ_GMAIL_APP_PASSWORD")
+IMAP_USER    = os.environ.get("GMAIL_USER")
+IMAP_PASS    = os.environ.get("GMAIL_PASSWORD")
 IMAP_FOLDER  = os.environ.get("IMAP_FOLDER", "INBOX")
 GMAIL_LABEL  = os.environ.get("GMAIL_LABEL")  # optional
 
 # ====== Classifier & GP parser
-from src.classify import classify_file
+from src.classify import classify_file, classify_email_subject
 from src.parsers.gp_report import parse_gp_report
 
 # ====== SQL
@@ -154,6 +154,9 @@ class AttachmentRec:
     filename: str
     data: bytes
     sha256: str
+    subject: str
+    pharmacy_id: Optional[int] = None
+    pharmacy_name: Optional[str] = None
 
 def sha256_bytes(b: bytes) -> str:
     h = hashlib.sha256(); h.update(b); return h.hexdigest()
@@ -161,17 +164,29 @@ def sha256_bytes(b: bytes) -> str:
 def bdate(rec: Dict[str, Any]) -> Optional[str]:
     return rec.get("business_date") or rec.get("date_from") or rec.get("date_to")
 
-def classify_and_parse_bytes(filename: str, data: bytes) -> Dict[str, Any]:
+def classify_and_parse_bytes(att: AttachmentRec) -> Dict[str, Any]:
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        tmp.write(data); tmp.flush()
+        tmp.write(att.data); tmp.flush()
         path = tmp.name
-    c = classify_file(path)
-    if c.report_type != "gross_profit":
-        return {"status": "skipped_non_gp"}
-    rec = parse_gp_report(path)
-    rec["status"] = "parsed"
-    rec["report_type"] = "gross_profit"
-    return rec
+    
+    # Use email subject-based classification if available, otherwise fall back to PDF content
+    if att.pharmacy_id is not None:
+        # Email subject already classified this as a specific pharmacy
+        rec = parse_gp_report(path)
+        rec["pharmacy_id"] = att.pharmacy_id
+        rec["pharmacy_name"] = att.pharmacy_name
+        rec["status"] = "parsed"
+        rec["report_type"] = "gross_profit"
+        return rec
+    else:
+        # Fall back to PDF content-based classification
+        c = classify_file(path)
+        if c.report_type != "gross_profit":
+            return {"status": "skipped_non_gp"}
+        rec = parse_gp_report(path)
+        rec["status"] = "parsed"
+        rec["report_type"] = "gross_profit"
+        return rec
 
 # ====== Fetch PDFs in a date window (same style as 2a)
 def fetch_attachments_range(folder: str, label: Optional[str], since_d: date, until_d: date,
@@ -246,13 +261,18 @@ def fetch_attachments_range(folder: str, label: Optional[str], since_d: date, un
             msg_bytes = fetch_map[uid][b"RFC822"]
             msg = message_from_bytes(msg_bytes)
             received = (meta[uid][b"INTERNALDATE"]).astimezone(timezone.utc)
+            
+            # Extract email subject for pharmacy classification
+            subject = msg.get("subject", "") or ""
+            pharmacy_id, pharmacy_name = classify_email_subject(subject)
+            
             for part in msg.walk():
                 cd = part.get_content_disposition()
                 fn = part.get_filename() or ""
                 if cd == "attachment" and fn.lower().endswith(".pdf"):
                     payload = part.get_payload(decode=True)
                     if payload:
-                        out.append(AttachmentRec(uid, received, fn, payload, sha256_bytes(payload)))
+                        out.append(AttachmentRec(uid, received, fn, payload, sha256_bytes(payload), subject, pharmacy_id, pharmacy_name))
     return out
 
 # ====== CSV helper for COPY
@@ -390,7 +410,7 @@ def main():
                 continue
 
             # 2) classify + parse GP only
-            rec = classify_and_parse_bytes(att.filename, att.data)
+            rec = classify_and_parse_bytes(att)
             if rec.get("status") != "parsed":
                 reason = rec.get("status", "unparsed")
                 print(f"[gp-hist] processed {idx}/{total} - {status} ({reason})", flush=True)
