@@ -21,26 +21,29 @@ from psycopg.rows import dict_row
 load_dotenv(find_dotenv(), override=False)
 
 DSN          = os.environ.get("DATABASE_URL")
-IMAP_USER    = os.environ.get("REITZ_GMAIL_USERNAME")
-IMAP_PASS    = os.environ.get("REITZ_GMAIL_APP_PASSWORD")
+IMAP_USER    = os.environ.get("GMAIL_USER")
+IMAP_PASS    = os.environ.get("GMAIL_PASSWORD")
 IMAP_FOLDER  = os.environ.get("IMAP_FOLDER", "INBOX")
 GMAIL_LABEL  = os.environ.get("GMAIL_LABEL")  # optional
 
 # ====== Parsers & classifier (adjust paths if needed)
-from src.classify import classify_file
+from src.classify import classify_file, classify_email_subject
 from src.parsers.turnover import parse_turnover_summary
 from src.parsers.trading_account import parse_trading_account
 from src.parsers.scripts import parse_scripts
+from src.parsers.gp_report import parse_gp_report
 
 REPORT_MAP = {
     "turnover_summary": parse_turnover_summary,   # INV249
     "trading_account":  parse_trading_account,    # STK261
     "dispensary_scripts": parse_scripts,          # PHM080
+    "gross_profit": parse_gp_report,              # STK260
 }
 COVERAGE_COL = {
     "turnover_summary": "inv249_turnover",
     "trading_account":  "stk261_trading",
     "dispensary_scripts": "phm080_scripts",
+    "gross_profit": "stk260_gp",
 }
 
 def _pretty_rtype(rt: Optional[str]) -> str:
@@ -48,6 +51,7 @@ def _pretty_rtype(rt: Optional[str]) -> str:
         "turnover_summary": "turnover",
         "trading_account": "trading",
         "dispensary_scripts": "dispensary",
+        "gross_profit": "gp",
     }.get(rt or "", rt or "unknown")
 
 # ====== SQL (historical mode: fill NULLs only)
@@ -128,6 +132,9 @@ class AttachmentRec:
     filename: str
     data: bytes
     sha256: str
+    subject: str  # Email subject for classification
+    pharmacy_id: Optional[int] = None  # Pre-classified pharmacy ID
+    pharmacy_name: Optional[str] = None  # Pre-classified pharmacy name
 
 def sha256_bytes(b: bytes) -> str:
     h = hashlib.sha256(); h.update(b); return h.hexdigest()
@@ -239,27 +246,46 @@ def fetch_attachments_range(folder: str, label: Optional[str], since_d: date, un
             msg_bytes = fetch_map[uid][b"RFC822"]
             msg = message_from_bytes(msg_bytes)
             received = (meta[uid][b"INTERNALDATE"]).astimezone(timezone.utc)
+            
+            # Pre-classify by email subject
+            subject = msg.get("subject", "")
+            pharmacy_info = classify_email_subject(subject)
+            pharmacy_id = pharmacy_info[0].value if pharmacy_info else None
+            pharmacy_name = pharmacy_info[1] if pharmacy_info else None
+            
+            if pharmacy_id and verbose:
+                print(f"[hist] Email subject classified: {pharmacy_name} (ID: {pharmacy_id}) from subject: {subject[:50]}...")
+            
             for part in msg.walk():
                 cd = part.get_content_disposition()
                 fn = part.get_filename() or ""
                 if cd == "attachment" and fn.lower().endswith(".pdf"):
                     payload = part.get_payload(decode=True)
                     if payload:
-                        out.append(AttachmentRec(uid, received, fn, payload, sha256_bytes(payload)))
+                        out.append(AttachmentRec(
+                            uid, received, fn, payload, sha256_bytes(payload),
+                            subject, pharmacy_id, pharmacy_name
+                        ))
     return out
 
-def classify_and_parse_bytes(filename: str, data: bytes) -> Dict[str, Any]:
+def classify_and_parse_bytes(filename: str, data: bytes, att: AttachmentRec) -> Dict[str, Any]:
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         tmp.write(data); tmp.flush()
         path = tmp.name
     c = classify_file(path)
     if not c.report_type: return {"status": "skipped_unclassified"}
-    if c.report_type not in REPORT_MAP:  # ignore GP for 2a
+    if c.report_type not in REPORT_MAP:  # now includes GP reports
         return {"status": "skipped_non_daily"}
     parser = REPORT_MAP[c.report_type]
     rec = parser(path)
     rec["status"] = "parsed"
     rec["report_type"] = c.report_type
+    
+    # Use pre-classified pharmacy info from email subject if available
+    if att.pharmacy_id and att.pharmacy_id != rec.get("pharmacy_id"):
+        print(f"[hist] Overriding PDF pharmacy_id {rec.get('pharmacy_id')} with email subject pharmacy_id {att.pharmacy_id}")
+        rec["pharmacy_id"] = att.pharmacy_id
+    
     return rec
 
 def bdate(rec: Dict[str, Any]) -> Optional[str]:
@@ -300,26 +326,27 @@ def insert_receipt_and_coverage(cur, att: AttachmentRec, rec: Dict[str, Any]):
 
 def print_coverage(cur, since_d: date, until_d: date):
     cur.execute("""
-      SELECT pharmacy_id, business_date, inv249_turnover, stk261_trading, phm080_scripts
+      SELECT pharmacy_id, business_date,
+             inv249_turnover, stk261_trading, phm080_scripts, stk260_gp
       FROM pharma.report_coverage
       WHERE business_date BETWEEN %s AND %s
-      ORDER BY business_date, pharmacy_id
+      ORDER BY pharmacy_id, business_date
     """, (since_d, until_d))
     rows = cur.fetchall()
-    if not rows:
-        print("[hist] coverage: no rows in the window yet.")
-        return
+
     print("\n[hist] Coverage logbook:")
-    print("pharmacy_id | date       | INV249 | STK261 | PHM080 | missing")
+    print("pharmacy_id | date       | INV249 | STK261 | PHM080 | STK260 | missing")
     for r in rows:
         miss = []
         if not r["inv249_turnover"]: miss.append("INV249")
         if not r["stk261_trading"]:  miss.append("STK261")
         if not r["phm080_scripts"]:  miss.append("PHM080")
+        if not r["stk260_gp"]:       miss.append("STK260")
         print(f"{r['pharmacy_id']:>11} | {r['business_date']} | "
               f"{'Y' if r['inv249_turnover'] else ' ' :^6}|"
               f"{'Y' if r['stk261_trading']  else ' ' :^7}|"
-              f"{'Y' if r['phm080_scripts']  else ' ' :^7}| "
+              f"{'Y' if r['phm080_scripts']  else ' ' :^7}|"
+              f"{'Y' if r['stk260_gp']       else ' ' :^7}| "
               f"{','.join(miss) if miss else '-'}")
 
 def main():
@@ -365,7 +392,7 @@ def main():
                 continue
 
             # 2) classify + parse; only 3 daily report types
-            rec = classify_and_parse_bytes(att.filename, att.data)
+            rec = classify_and_parse_bytes(att.filename, att.data, att)
             if rec.get("status") != "parsed":
                 reason = rec.get("status", "unparsed")
                 print(f"[hist] processed {idx}/{total} - {status} ({reason})", flush=True)
