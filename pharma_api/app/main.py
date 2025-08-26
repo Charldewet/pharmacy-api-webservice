@@ -4,6 +4,7 @@ import orjson
 from .config import settings, CORS_ORIGINS, CORS_METHODS, CORS_HEADERS
 from .routers import pharmacies, days, stock, agg, logbook, products
 from .routers import usage
+from .routers import users
 
 class ORJSONResponse:
     media_type = "application/json"
@@ -15,21 +16,22 @@ class ORJSONResponse:
         # not used directly; FastAPI handles response class
         pass
 
-app = FastAPI(title="Pharma API", version="1.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=CORS_ORIGINS or ["*"],
-    allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
-    allow_methods=CORS_METHODS or ["GET", "OPTIONS"],
-    allow_headers=CORS_HEADERS or ["Authorization","Content-Type"],
+app = FastAPI(
+    title="Pharmacy Data API",
+    description="API for pharmacy sales, inventory, and analytics data",
+    version="1.0.0"
 )
 
-@app.get("/health")
-def health():
-    return {"ok": True}
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure appropriately for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# mount routers
+# Include routers
 app.include_router(pharmacies.router)
 app.include_router(days.router)
 app.include_router(stock.router)
@@ -37,3 +39,8 @@ app.include_router(agg.router)
 app.include_router(logbook.router)
 app.include_router(products.router)
 app.include_router(usage.router)
+app.include_router(users.router)
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
