@@ -173,7 +173,12 @@ def classify_and_parse_bytes(att: AttachmentRec) -> Dict[str, Any]:
     if att.pharmacy_id is not None:
         # Email subject already classified this as a specific pharmacy
         rec = parse_gp_report(path)
-        rec["pharmacy_id"] = att.pharmacy_id
+        # Coerce to int in case it's an Enum or stringified
+        try:
+            pid_int = int(getattr(att.pharmacy_id, "value", att.pharmacy_id))
+        except Exception:
+            pid_int = None
+        rec["pharmacy_id"] = pid_int
         rec["pharmacy_name"] = att.pharmacy_name
         rec["status"] = "parsed"
         rec["report_type"] = "gross_profit"
@@ -264,7 +269,12 @@ def fetch_attachments_range(folder: str, label: Optional[str], since_d: date, un
             
             # Extract email subject for pharmacy classification
             subject = msg.get("subject", "") or ""
-            pharmacy_id, pharmacy_name = classify_email_subject(subject)
+            pid_raw, pharmacy_name = classify_email_subject(subject)
+            # Coerce Enum-like values to plain int
+            try:
+                pharmacy_id = int(getattr(pid_raw, "value", pid_raw)) if pid_raw is not None else None
+            except Exception:
+                pharmacy_id = None
             
             for part in msg.walk():
                 cd = part.get_content_disposition()
