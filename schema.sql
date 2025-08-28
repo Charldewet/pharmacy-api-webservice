@@ -180,3 +180,21 @@ ON CONFLICT (pharmacy_id) DO NOTHING;
 INSERT INTO pharma.pharmacies (pharmacy_id, name) VALUES
   (2, 'TLC PHARMACY WINTERTON')
 ON CONFLICT (pharmacy_id) DO NOTHING;
+
+-- ========== USERS & ACCESS CONTROL ==========
+CREATE TABLE IF NOT EXISTS pharma.users (
+  user_id       bigserial PRIMARY KEY,
+  username      text NOT NULL UNIQUE,
+  email         text NOT NULL UNIQUE,
+  password_hash text NOT NULL,
+  is_active     boolean NOT NULL DEFAULT true,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS pharma.user_pharmacies (
+  user_id     bigint  NOT NULL REFERENCES pharma.users(user_id) ON DELETE CASCADE,
+  pharmacy_id integer NOT NULL REFERENCES pharma.pharmacies(pharmacy_id) ON DELETE CASCADE,
+  can_read    boolean NOT NULL DEFAULT true,
+  can_write   boolean NOT NULL DEFAULT false,
+  PRIMARY KEY (user_id, pharmacy_id)
+);

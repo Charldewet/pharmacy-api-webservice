@@ -4,6 +4,7 @@ import os, sys, io, time, json, hashlib, tempfile, argparse
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict, Any, Iterable
 from datetime import date, datetime, timedelta, timezone
+import random
 
 # --- ensure project root on sys.path (so `src.*` imports work when running from scripts/)
 from pathlib import Path
@@ -16,6 +17,7 @@ from imapclient import IMAPClient
 from email import message_from_bytes
 from psycopg import connect
 from psycopg.rows import dict_row
+from psycopg.errors import DeadlockDetected, OperationalError
 
 # ====== ENV
 load_dotenv(find_dotenv(), override=False)
@@ -397,14 +399,47 @@ def main():
     if not atts:
         return
 
-    # Connect and process in one transaction
+    # Process with retry logic for deadlocks
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            if retry_count > 0:
+                print(f"[gp-hist] Retry attempt {retry_count}/{max_retries} after deadlock...")
+                time.sleep(random.uniform(1, 3))  # Random backoff
+            
+            process_attachments_with_retry(atts, args, retry_count)
+            break
+            
+        except DeadlockDetected as e:
+            retry_count += 1
+            if retry_count >= max_retries:
+                print(f"[gp-hist] Fatal: Max retries exceeded after deadlock: {e}")
+                raise
+            print(f"[gp-hist] Deadlock detected, retrying... (attempt {retry_count}/{max_retries})")
+            continue
+        except Exception as e:
+            print(f"[gp-hist] Unexpected error: {e}")
+            raise
+
+def process_attachments_with_retry(atts, args, retry_count=0):
+    """Process attachments with better transaction handling to avoid deadlocks."""
     dsn = DSN if "connect_timeout=" in DSN else (DSN + ("&" if "?" in DSN else "?") + "connect_timeout=10")
+    
     with connect(dsn, row_factory=dict_row, autocommit=False) as conn:
         cur = conn.cursor()
+        
+        # Set transaction isolation level to reduce deadlock probability
+        cur.execute("SET LOCAL transaction_isolation = 'read committed';")
         cur.execute("SET LOCAL statement_timeout = 0;")
         cur.execute("SET LOCAL synchronous_commit = off;")
+        
+        # Add small random delay to reduce contention
+        if retry_count > 0:
+            time.sleep(random.uniform(0.1, 0.5))
 
-        kept = skipped_sha = skipped_covered = parsed = 0
+        kept = skipped_covered = parsed = 0
         selected: List[Tuple[AttachmentRec, Dict[str, Any]]] = []
         total = len(atts)
 
@@ -412,14 +447,7 @@ def main():
             status = "skipped"
             reason = None
 
-            # 1) dedupe by sha (before parse)
-            if receipt_sha_seen(cur, att.sha256):
-                skipped_sha += 1
-                reason = "duplicate"
-                print(f"[gp-hist] processed {idx}/{total} - {status} ({reason})", flush=True)
-                continue
-
-            # 2) classify + parse GP only
+            # 1) classify + parse GP only
             rec = classify_and_parse_bytes(att)
             if rec.get("status") != "parsed":
                 reason = rec.get("status", "unparsed")
@@ -435,7 +463,7 @@ def main():
 
             parsed += 1
 
-            # 3) skip if already covered GP for this day unless --force
+            # 2) skip if already covered GP for this day unless --force
             if not args.force and coverage_has_gp(cur, pid, bdt):
                 # still write receipt + coverage (no-op coverage)
                 params = {
@@ -490,7 +518,7 @@ def main():
 
         conn.commit()
 
-    print(f"[gp-hist] Done | parsed={parsed} kept={kept} skipped_sha={skipped_sha} skipped_covered={skipped_covered}")
+    print(f"[gp-hist] Done | parsed={parsed} kept={kept} skipped_covered={skipped_covered}")
 
 if __name__ == "__main__":
     # optional: unbuffered prints & a quick env sanity line
