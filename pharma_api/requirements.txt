@@ -9,4 +9,4 @@ orjson>=3.10
 PyJWT>=2.9.0
 cryptography>=45.0.0
 httpx>=0.27.2
-apns2==0.3.0
+
