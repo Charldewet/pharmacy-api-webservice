@@ -2,9 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import orjson
 from .config import settings, CORS_ORIGINS, CORS_METHODS, CORS_HEADERS
-from .routers import pharmacies, days, stock, agg, logbook, products
-from .routers import usage
-from .routers import users
+from .routers import pharmacies, days, stock, agg, logbook, products, usage, users
+from .routers import notifications
 
 class ORJSONResponse:
     media_type = "application/json"
@@ -25,10 +24,10 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=CORS_ORIGINS,  # Configure appropriately for production
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=CORS_METHODS,
+    allow_headers=CORS_HEADERS,
 )
 
 # Include routers
@@ -40,6 +39,7 @@ app.include_router(logbook.router)
 app.include_router(products.router)
 app.include_router(usage.router)
 app.include_router(users.router)
+app.include_router(notifications.router)
 
 @app.get("/health")
 async def health_check():

@@ -5,10 +5,12 @@ from typing import List
 class Settings(BaseSettings):
     DATABASE_URL: str
     API_KEY: str
+    JWT_SECRET: str = "dev-secret-change-me"
+    TOKEN_ENCRYPTION_KEY: str = ""
 
     CORS_ALLOW_ORIGINS: str = "*"
     CORS_ALLOW_CREDENTIALS: bool = False
-    CORS_ALLOW_METHODS: str = "GET,OPTIONS"
+    CORS_ALLOW_METHODS: str = "GET,OPTIONS,POST,PUT,DELETE"
     CORS_ALLOW_HEADERS: str = "Authorization,Content-Type"
 
     STATEMENT_TIMEOUT_MS: int = 10000

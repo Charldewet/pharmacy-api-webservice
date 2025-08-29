@@ -6,3 +6,5 @@ python-dotenv>=1.0
 pydantic>=2.7
 pydantic-settings>=2.3
 orjson>=3.10
+PyJWT>=2.9.0
+cryptography>=45.0.0
