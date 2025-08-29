@@ -7,6 +7,12 @@ class Settings(BaseSettings):
     API_KEY: str
     JWT_SECRET: str = "dev-secret-change-me"
     TOKEN_ENCRYPTION_KEY: str = ""
+    
+    # Apple Push Notification settings
+    APPLE_TEAM_ID: str = ""
+    APPLE_KEY_ID: str = ""
+    APPLE_PRIVATE_KEY_PATH: str = ""
+    APPLE_BUNDLE_ID: str = ""
 
     CORS_ALLOW_ORIGINS: str = "*"
     CORS_ALLOW_CREDENTIALS: bool = False

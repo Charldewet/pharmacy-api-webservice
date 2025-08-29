@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional
 import httpx
 from ..db import get_conn
 from ..utils.crypto import decrypt_token
+from .apple_push import create_apple_push_service
 
 EXPO_URL = "https://exp.host/--/api/v2/push/send"
 
@@ -33,14 +34,71 @@ def _idempotency_key(user_id: int, kind: str, pharmacy_id: int, day_key: str, ve
     return f"{user_id}:{kind}:{pharmacy_id}:{day_key}:{version}"
 
 
-async def _send_expo_batch(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+async def _send_push_notifications(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Send push notifications using the appropriate service based on device type
+    """
     if not messages:
         return []
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(EXPO_URL, json=messages)
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("data") or []
+    
+    # Initialize Apple Push service
+    apple_service = create_apple_push_service()
+    
+    # Separate messages by service
+    expo_messages = []
+    apple_messages = []
+    
+    for msg in messages:
+        device_token = msg.get("to", "")
+        
+        # Check if this is an Apple device token (not Expo format)
+        if device_token.startswith("ExponentPushToken["):
+            # Expo device - use Expo service
+            expo_messages.append(msg)
+        else:
+            # Apple device - use Apple APNs
+            apple_messages.append(msg)
+    
+    results = []
+    
+    # Send to Expo if we have Expo messages
+    if expo_messages:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(EXPO_URL, json=expo_messages)
+                resp.raise_for_status()
+                data = resp.json()
+                expo_results = data.get("data") or []
+                results.extend(expo_results)
+        except Exception as e:
+            # Log Expo errors but continue with Apple
+            print(f"Expo push error: {e}")
+            results.extend([{"status": "error", "error": str(e)} for _ in expo_messages])
+    
+    # Send to Apple APNs if we have Apple messages and service
+    if apple_messages and apple_service:
+        try:
+            # Convert messages to Apple format
+            apple_notifications = []
+            for msg in apple_messages:
+                apple_notifications.append({
+                    "device_token": msg["to"],
+                    "title": msg.get("title", ""),
+                    "body": msg.get("body", ""),
+                    "data": msg.get("data", {}),
+                    "sound": msg.get("sound", "default")
+                })
+            
+            apple_results = await apple_service.send_batch_notifications(apple_notifications)
+            results.extend(apple_results)
+        except Exception as e:
+            print(f"Apple push error: {e}")
+            results.extend([{"status": "error", "error": str(e)} for _ in apple_messages])
+    elif apple_messages and not apple_service:
+        # Apple messages but no service configured
+        results.extend([{"status": "error", "error": "Apple APNs not configured"} for _ in apple_messages])
+    
+    return results
 
 
 def _insert_log(cur, user_id: int, kind: str, pharmacy_id: int, idem: str, status: str, error: str | None, ticket_id: str | None):
@@ -168,12 +226,29 @@ async def run_once() -> None:
             batch = to_send[i:i+100]
             batch_meta = tickets[i:i+100]
             try:
-                results = await _send_expo_batch(batch)
+                results = await _send_push_notifications(batch)
                 for meta, res in zip(batch_meta, results or []):
                     uid, kind, pid, idem = meta
-                    ticket_id = res.get("id") if isinstance(res, dict) else None
-                    _insert_log(cur, uid, kind, pid, idem, "SENT", None, ticket_id)
-                    sent += 1
+                    
+                    # Handle different result formats from Expo vs Apple
+                    if isinstance(res, dict):
+                        if res.get("status") == "success":
+                            ticket_id = res.get("apns_id") or res.get("id")
+                            _insert_log(cur, uid, kind, pid, idem, "SENT", None, ticket_id)
+                            sent += 1
+                        elif res.get("status") == "unregistered":
+                            # Mark device as disabled for invalid tokens
+                            cur.execute("UPDATE pharma.devices SET disabled_at = now() WHERE user_id = %s AND push_token_enc = %s", (uid, batch_meta[0][0]))
+                            _insert_log(cur, uid, kind, pid, idem, "FAILED", "Device token invalid", None)
+                            failed += 1
+                        else:
+                            _insert_log(cur, uid, kind, pid, idem, "FAILED", res.get("error", "Unknown error"), None)
+                            failed += 1
+                    else:
+                        # Legacy Expo format
+                        ticket_id = res.get("id") if hasattr(res, 'get') else None
+                        _insert_log(cur, uid, kind, pid, idem, "SENT", None, ticket_id)
+                        sent += 1
             except Exception as e:
                 for meta in batch_meta:
                     uid, kind, pid, idem = meta
