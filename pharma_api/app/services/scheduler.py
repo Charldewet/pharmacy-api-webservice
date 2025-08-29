@@ -57,7 +57,7 @@ def _insert_log(cur, user_id: int, kind: str, pharmacy_id: int, idem: str, statu
 def _fetch_low_gp_items(cur, pharmacy_id: int, local_day: date, threshold: float) -> List[Dict[str, Any]]:
     cur.execute(
         """
-        SELECT p.product_code AS sku,
+        SELECT p.product_code AS product_code,
                COALESCE(p.description,'') AS description,
                f.gp_pct
         FROM pharma.fact_stock_activity f
@@ -71,7 +71,7 @@ def _fetch_low_gp_items(cur, pharmacy_id: int, local_day: date, threshold: float
         (pharmacy_id, local_day, threshold),
     )
     rows = cur.fetchall() or []
-    return [{"sku": r["sku"], "description": r["description"], "gp_pct": float(r["gp_pct"]) } for r in rows]
+    return [{"product_code": r["product_code"], "description": r["description"], "gp_pct": float(r["gp_pct"]) } for r in rows]
 
 
 async def run_once() -> None:
@@ -110,15 +110,16 @@ async def run_once() -> None:
                         cur.execute("SELECT 1 FROM pharma.notification_log WHERE idempotency_key=%s", (idem,))
                         if cur.fetchone():
                             continue
-                        cur.execute("SELECT name FROM pharma.pharmacies WHERE pharmacy_id=%s", (pid,))
+                        cur.execute("SELECT name, code FROM pharma.pharmacies WHERE pharmacy_id=%s", (pid,))
                         ph = cur.fetchone()
                         pname = ph["name"] if ph else str(pid)
+                        pcode = ph["code"] if ph else str(pid)
                         to_send.append({
                             "to": token,
                             "sound": "default",
                             "title": "TLC PharmaSight",
-                            "body": "Daily Summary",
-                            "data": {"type": "DAILY_SUMMARY", "pharmacyId": pid, "pharmacyName": pname},
+                            "body": f"Daily Summary for {pname}",
+                            "data": {"type": "DAILY_SUMMARY", "pharmacyCode": pcode, "pharmacyName": pname},
                         })
                         tickets.append((user_id, "DAILY_SUMMARY", pid, idem))
                         queued += 1
@@ -134,16 +135,28 @@ async def run_once() -> None:
                         cur.execute("SELECT 1 FROM pharma.notification_log WHERE idempotency_key=%s", (idem,))
                         if cur.fetchone():
                             continue
-                        cur.execute("SELECT name FROM pharma.pharmacies WHERE pharmacy_id=%s", (pid,))
+                        
+                        # Only send low GP alerts if there are actually items below threshold
+                        low_items = _fetch_low_gp_items(cur, pid, local_day, threshold)
+                        if not low_items:
+                            continue  # Skip this pharmacy if no low GP items
+                        
+                        cur.execute("SELECT name, code FROM pharma.pharmacies WHERE pharmacy_id=%s", (pid,))
                         ph = cur.fetchone()
                         pname = ph["name"] if ph else str(pid)
-                        low_items = _fetch_low_gp_items(cur, pid, local_day, threshold)
+                        pcode = ph["code"] if ph else str(pid)
+                        # Create a detailed body with product names and GP percentages
+                        product_details = []
+                        for item in low_items:
+                            product_details.append(f"{item['description']} ({item['gp_pct']:.1f}%)")
+                        body_text = f"Low GP Alert - {pname}\n" + "\n".join(product_details)
+                        
                         to_send.append({
                             "to": token,
                             "sound": "default",
                             "title": "TLC PharmaSight - Low GP Alert",
-                            "body": "Low GP products available" if low_items else "Low GP threshold reached",
-                            "data": {"type": "LOW_GP_ALERT", "pharmacyId": pid, "pharmacyName": pname, "lowGPItems": low_items, "threshold": threshold},
+                            "body": body_text,
+                            "data": {"type": "LOW_GP_ALERT", "pharmacyCode": pcode, "pharmacyName": pname, "lowGPItems": low_items, "threshold": threshold},
                         })
                         tickets.append((user_id, "LOW_GP_ALERT", pid, idem))
                         queued += 1
