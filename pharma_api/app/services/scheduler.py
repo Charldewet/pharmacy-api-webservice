@@ -6,7 +6,11 @@ from typing import List, Dict, Any, Optional
 import httpx
 from ..db import get_conn
 from ..utils.crypto import decrypt_token
-from .apple_push import create_apple_push_service
+try:
+    from .apple_push import create_apple_push_service
+except ImportError:
+    print("⚠️  Apple APNs not available - using Expo only")
+    create_apple_push_service = lambda: None
 
 EXPO_URL = "https://exp.host/--/api/v2/push/send"
 
