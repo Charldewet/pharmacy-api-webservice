@@ -6,11 +6,7 @@ from typing import List, Dict, Any, Optional
 import httpx
 from ..db import get_conn
 from ..utils.crypto import decrypt_token
-try:
-    from .apple_push import create_apple_push_service
-except ImportError:
-    print("⚠️  Apple APNs not available - using Expo only")
-    create_apple_push_service = lambda: None
+from .apple_push import create_apple_push_service
 
 EXPO_URL = "https://exp.host/--/api/v2/push/send"
 
@@ -264,6 +260,23 @@ async def run_once() -> None:
 
 
 async def main_loop() -> None:
+    print("🚀 Starting notification scheduler...")
+    
+    # Verify Apple APNs is configured
+    apple_service = create_apple_push_service()
+    if not apple_service:
+        print("❌ CRITICAL: Apple APNs not configured!")
+        print("   Please check environment variables:")
+        print("   - APPLE_TEAM_ID")
+        print("   - APPLE_KEY_ID") 
+        print("   - APPLE_PRIVATE_KEY_PATH")
+        print("   - APPLE_BUNDLE_ID")
+        print("   - Ensure .p8 file is uploaded to Render")
+        print("   - Worker will exit - fix configuration and redeploy")
+        return
+    
+    print("✅ Apple APNs configured successfully")
+    
     while True:
         try:
             await run_once()
