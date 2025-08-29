@@ -81,14 +81,13 @@ def push_register(req: PushRegisterRequest, user_id: int = Depends(get_current_u
     _validate_time("00:00")  # no-op, keeps helper import usage
     enc = encrypt_token(req.pushToken)
     with get_conn() as conn, conn.cursor() as cur:
-        # upsert device
+        # upsert device on (user_id, device_id)
         cur.execute(
             """
             INSERT INTO pharma.devices (user_id, device_id, platform, push_token_enc, timezone,
                                         device_model, os_version, app_version, locale, last_seen_at, disabled_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now(), NULL)
-            ON CONFLICT (device_id) DO UPDATE SET
-              user_id = EXCLUDED.user_id,
+            ON CONFLICT (user_id, device_id) DO UPDATE SET
               platform = EXCLUDED.platform,
               push_token_enc = EXCLUDED.push_token_enc,
               timezone = EXCLUDED.timezone,

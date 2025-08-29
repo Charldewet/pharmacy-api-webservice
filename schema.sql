@@ -198,3 +198,54 @@ CREATE TABLE IF NOT EXISTS pharma.user_pharmacies (
   can_write   boolean NOT NULL DEFAULT false,
   PRIMARY KEY (user_id, pharmacy_id)
 );
+
+-- ========== PUSH & NOTIFICATIONS ==========
+-- Store one row per device per user
+CREATE TABLE IF NOT EXISTS pharma.devices (
+  id              bigserial PRIMARY KEY,
+  user_id         bigint NOT NULL REFERENCES pharma.users(user_id) ON DELETE CASCADE,
+  device_id       text NOT NULL,
+  platform        text NOT NULL CHECK (platform IN ('ios','android')),
+  push_token_enc  bytea NOT NULL,
+  timezone        text NOT NULL,
+  device_model    text,
+  os_version      text,
+  app_version     text,
+  locale          text,
+  last_seen_at    timestamptz NOT NULL DEFAULT now(),
+  disabled_at     timestamptz,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id, device_id)
+);
+CREATE INDEX IF NOT EXISTS devices_user_idx ON pharma.devices(user_id);
+
+-- Per-user notification preferences
+CREATE TABLE IF NOT EXISTS pharma.notification_settings (
+  user_id                bigint PRIMARY KEY REFERENCES pharma.users(user_id) ON DELETE CASCADE,
+  daily_enabled          boolean NOT NULL DEFAULT false,
+  daily_time             text,
+  daily_pharmacy_ids     integer[],
+  lowgp_enabled          boolean NOT NULL DEFAULT false,
+  lowgp_time             text,
+  lowgp_pharmacy_ids     integer[],
+  lowgp_threshold        numeric(5,2),
+  created_at             timestamptz NOT NULL DEFAULT now(),
+  updated_at             timestamptz NOT NULL DEFAULT now()
+);
+
+-- Log sends and enforce idempotency
+CREATE TABLE IF NOT EXISTS pharma.notification_log (
+  id                bigserial PRIMARY KEY,
+  user_id           bigint NOT NULL REFERENCES pharma.users(user_id) ON DELETE CASCADE,
+  kind              text NOT NULL CHECK (kind IN ('DAILY_SUMMARY','LOW_GP_ALERT')),
+  pharmacy_id       integer REFERENCES pharma.pharmacies(pharmacy_id),
+  sent_at           timestamptz NOT NULL DEFAULT now(),
+  idempotency_key   text NOT NULL UNIQUE,
+  status            text NOT NULL CHECK (status IN ('SENT','SKIPPED','FAILED','RETRY')),
+  error             text,
+  ticket_id         text,
+  receipt_status    text,
+  receipt_error     text,
+  created_at        timestamptz NOT NULL DEFAULT now()
+);
