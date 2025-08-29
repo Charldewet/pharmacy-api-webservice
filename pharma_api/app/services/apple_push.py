@@ -1,18 +1,19 @@
 import asyncio
 import json
 import logging
+import time
+import jwt
 from typing import List, Dict, Any, Optional
-from apns2.client import APNsClient
-from apns2.payload import Payload
-from apns2.credentials import TokenCredentials
-from apns2.errors import UnregisteredError, BadDeviceTokenError
+import httpx
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 logger = logging.getLogger(__name__)
 
 class ApplePushService:
     def __init__(self, team_id: str, key_id: str, private_key_path: str, bundle_id: str):
         """
-        Initialize Apple Push Notification service
+        Initialize Apple Push Notification service using HTTP/2
         
         Args:
             team_id: Apple Developer Team ID
@@ -24,25 +25,55 @@ class ApplePushService:
         self.key_id = key_id
         self.private_key_path = private_key_path
         self.bundle_id = bundle_id
-        self.client = None
-        self._initialize_client()
+        self.token = None
+        self.token_expiry = 0
+        self._load_private_key()
     
-    def _initialize_client(self):
-        """Initialize the APNs client with credentials"""
+    def _load_private_key(self):
+        """Load the private key from file"""
         try:
-            credentials = TokenCredentials(
-                auth_key_path=self.private_key_path,
-                auth_key_id=self.key_id,
-                team_id=self.team_id
+            with open(self.private_key_path, 'r') as f:
+                private_key_data = f.read()
+            
+            self.private_key = serialization.load_pem_private_key(
+                private_key_data.encode(),
+                password=None
             )
-            self.client = APNsClient(
-                credentials=credentials,
-                use_sandbox=False  # Use production for TestFlight
-            )
-            logger.info("Apple APNs client initialized successfully")
+            logger.info("Apple APNs private key loaded successfully")
         except Exception as e:
-            logger.error(f"Failed to initialize Apple APNs client: {e}")
-            self.client = None
+            logger.error(f"Failed to load Apple APNs private key: {e}")
+            self.private_key = None
+    
+    def _generate_token(self):
+        """Generate JWT token for Apple APNs authentication"""
+        if not self.private_key:
+            return None
+        
+        now = int(time.time())
+        if self.token and now < self.token_expiry:
+            return self.token
+        
+        # Token expires in 1 hour
+        expiry = now + 3600
+        
+        payload = {
+            'iss': self.team_id,
+            'iat': now,
+            'exp': expiry
+        }
+        
+        headers = {
+            'kid': self.key_id,
+            'alg': 'ES256'
+        }
+        
+        try:
+            self.token = jwt.encode(payload, self.private_key, algorithm='ES256', headers=headers)
+            self.token_expiry = expiry
+            return self.token
+        except Exception as e:
+            logger.error(f"Failed to generate Apple APNs token: {e}")
+            return None
     
     async def send_notification(
         self, 
@@ -54,7 +85,7 @@ class ApplePushService:
         badge: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Send a push notification to an Apple device
+        Send a push notification to an Apple device using HTTP/2
         
         Args:
             device_token: The device push token
@@ -67,40 +98,56 @@ class ApplePushService:
         Returns:
             Dict with status and any error information
         """
-        if not self.client:
-            return {"status": "error", "error": "APNs client not initialized"}
+        if not self.private_key:
+            return {"status": "error", "error": "APNs private key not loaded"}
         
-        try:
-            # Create the notification payload
-            payload = Payload(
-                alert={
+        # Generate authentication token
+        auth_token = self._generate_token()
+        if not auth_token:
+            return {"status": "error", "error": "Failed to generate APNs auth token"}
+        
+        # Create notification payload
+        payload = {
+            "aps": {
+                "alert": {
                     "title": title,
                     "body": body
                 },
-                sound=sound,
-                badge=badge,
-                custom=data
-            )
-            
-            # Send the notification
-            result = self.client.send_notification(
-                device_token=device_token,
-                notification=payload,
-                topic=self.bundle_id
-            )
-            
-            # Check the result
-            if result.is_successful:
-                return {"status": "success", "apns_id": result.apns_id}
-            else:
-                return {"status": "error", "error": str(result.reason)}
+                "sound": sound,
+                "badge": badge
+            }
+        }
+        
+        # Add custom data
+        if data:
+            payload.update(data)
+        
+        # Apple APNs HTTP/2 endpoint
+        url = f"https://api.push.apple.com/3/device/{device_token}"
+        
+        headers = {
+            "authorization": f"bearer {auth_token}",
+            "apns-topic": self.bundle_id,
+            "apns-push-type": "alert",
+            "content-type": "application/json"
+        }
+        
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(url, json=payload, headers=headers)
                 
-        except UnregisteredError:
-            # Device token is invalid/expired
-            return {"status": "unregistered", "error": "Device token is invalid or expired"}
-        except BadDeviceTokenError:
-            # Bad device token format
-            return {"status": "bad_token", "error": "Bad device token format"}
+                if response.status_code == 200:
+                    apns_id = response.headers.get("apns-id")
+                    return {"status": "success", "apns_id": apns_id}
+                elif response.status_code == 410:
+                    # Device token is invalid/expired
+                    return {"status": "unregistered", "error": "Device token is invalid or expired"}
+                elif response.status_code == 400:
+                    # Bad request (bad token format, etc.)
+                    return {"status": "bad_token", "error": "Bad device token format"}
+                else:
+                    return {"status": "error", "error": f"APNs error: {response.status_code} - {response.text}"}
+                    
         except Exception as e:
             logger.error(f"Error sending Apple push notification: {e}")
             return {"status": "error", "error": str(e)}
@@ -118,8 +165,8 @@ class ApplePushService:
         Returns:
             List of results for each notification
         """
-        if not self.client:
-            return [{"status": "error", "error": "APNs client not initialized"} for _ in notifications]
+        if not self.private_key:
+            return [{"status": "error", "error": "APNs private key not loaded"} for _ in notifications]
         
         results = []
         for notification in notifications:
