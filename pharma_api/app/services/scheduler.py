@@ -29,8 +29,8 @@ def _is_due_now(user_tz: str, hhmm: str, window_minutes: int = 3) -> tuple[bool,
     return (timedelta(0) <= delta < timedelta(minutes=window_minutes), now_local.date())
 
 
-def _idempotency_key(user_id: int, kind: str, pharmacy_id: int, day_key: str) -> str:
-    return f"{user_id}:{kind}:{pharmacy_id}:{day_key}"
+def _idempotency_key(user_id: int, kind: str, pharmacy_id: int, day_key: str, version: str) -> str:
+    return f"{user_id}:{kind}:{pharmacy_id}:{day_key}:{version}"
 
 
 async def _send_expo_batch(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -84,7 +84,8 @@ async def run_once() -> None:
             """
             SELECT d.user_id, d.device_id, d.push_token_enc, d.timezone,
                    s.daily_enabled, s.daily_time, s.daily_pharmacy_ids,
-                   s.lowgp_enabled, s.lowgp_time, s.lowgp_pharmacy_ids, s.lowgp_threshold
+                   s.lowgp_enabled, s.lowgp_time, s.lowgp_pharmacy_ids, s.lowgp_threshold,
+                   s.updated_at AS settings_updated_at
             FROM pharma.devices d
             JOIN pharma.notification_settings s ON s.user_id = d.user_id
             WHERE d.disabled_at IS NULL
@@ -97,6 +98,7 @@ async def run_once() -> None:
             user_id = r["user_id"]
             tz = r["timezone"]
             token = decrypt_token(r["push_token_enc"])
+            settings_ver = str(int(r["settings_updated_at"].timestamp())) if r["settings_updated_at"] else "0"
 
             # DAILY SUMMARY
             if r["daily_enabled"] and r["daily_time"]:
@@ -104,7 +106,7 @@ async def run_once() -> None:
                 if due and local_day is not None:
                     day_key = local_day.isoformat()
                     for pid in (r["daily_pharmacy_ids"] or []):
-                        idem = _idempotency_key(user_id, "DAILY_SUMMARY", pid, day_key)
+                        idem = _idempotency_key(user_id, "DAILY_SUMMARY", pid, day_key, settings_ver)
                         cur.execute("SELECT 1 FROM pharma.notification_log WHERE idempotency_key=%s", (idem,))
                         if cur.fetchone():
                             continue
@@ -128,7 +130,7 @@ async def run_once() -> None:
                     day_key = local_day.isoformat()
                     threshold = float(r["lowgp_threshold"]) if r["lowgp_threshold"] is not None else 10.0
                     for pid in (r["lowgp_pharmacy_ids"] or []):
-                        idem = _idempotency_key(user_id, "LOW_GP_ALERT", pid, day_key)
+                        idem = _idempotency_key(user_id, "LOW_GP_ALERT", pid, day_key, settings_ver)
                         cur.execute("SELECT 1 FROM pharma.notification_log WHERE idempotency_key=%s", (idem,))
                         if cur.fetchone():
                             continue
