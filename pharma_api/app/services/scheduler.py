@@ -54,7 +54,7 @@ def _insert_log(cur, user_id: int, kind: str, pharmacy_id: int, idem: str, statu
     )
 
 
-def _fetch_low_gp_items(cur, pharmacy_id: int, local_day: date, threshold: float, limit: int = 5) -> List[Dict[str, Any]]:
+def _fetch_low_gp_items(cur, pharmacy_id: int, local_day: date, threshold: float) -> List[Dict[str, Any]]:
     cur.execute(
         """
         SELECT p.product_code AS sku,
@@ -67,9 +67,8 @@ def _fetch_low_gp_items(cur, pharmacy_id: int, local_day: date, threshold: float
           AND f.gp_pct IS NOT NULL
           AND f.gp_pct < %s
         ORDER BY f.gp_pct ASC
-        LIMIT %s
         """,
-        (pharmacy_id, local_day, threshold, limit),
+        (pharmacy_id, local_day, threshold),
     )
     rows = cur.fetchall() or []
     return [{"sku": r["sku"], "description": r["description"], "gp_pct": float(r["gp_pct"]) } for r in rows]
@@ -136,7 +135,7 @@ async def run_once() -> None:
                         cur.execute("SELECT name FROM pharma.pharmacies WHERE pharmacy_id=%s", (pid,))
                         ph = cur.fetchone()
                         pname = ph["name"] if ph else str(pid)
-                        low_items = _fetch_low_gp_items(cur, pid, local_day, threshold, limit=5)
+                        low_items = _fetch_low_gp_items(cur, pid, local_day, threshold)
                         to_send.append({
                             "to": token,
                             "sound": "default",
@@ -167,12 +166,10 @@ async def run_once() -> None:
                     failed += 1
         conn.commit()
 
-        # simple heartbeat log
         print(f"[scheduler] queued={queued} sent={sent} failed={failed} at {_utcnow().isoformat()}")
 
 
 async def main_loop() -> None:
-    # Simple every-minute loop
     while True:
         try:
             await run_once()
