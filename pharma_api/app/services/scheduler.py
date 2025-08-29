@@ -154,8 +154,8 @@ async def run_once() -> None:
                         to_send.append({
                             "to": token,
                             "sound": "default",
-                            "title": "TLC PharmaSight - Low GP Alert",
-                            "body": body_text,
+                            "title": f"Low GP Alert - {pname}",
+                            "body": "\n".join(product_details),
                             "data": {"type": "LOW_GP_ALERT", "pharmacyCode": pcode, "pharmacyName": pname, "lowGPItems": low_items, "threshold": threshold},
                         })
                         tickets.append((user_id, "LOW_GP_ALERT", pid, idem))
