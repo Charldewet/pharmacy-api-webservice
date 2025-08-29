@@ -110,10 +110,10 @@ async def run_once() -> None:
                         cur.execute("SELECT 1 FROM pharma.notification_log WHERE idempotency_key=%s", (idem,))
                         if cur.fetchone():
                             continue
-                        cur.execute("SELECT name, code FROM pharma.pharmacies WHERE pharmacy_id=%s", (pid,))
+                        cur.execute("SELECT name FROM pharma.pharmacies WHERE pharmacy_id=%s", (pid,))
                         ph = cur.fetchone()
                         pname = ph["name"] if ph else str(pid)
-                        pcode = ph["code"] if ph else str(pid)
+                        pcode = str(pid)  # Use pharmacy_id as the code
                         to_send.append({
                             "to": token,
                             "sound": "default",
@@ -141,10 +141,10 @@ async def run_once() -> None:
                         if not low_items:
                             continue  # Skip this pharmacy if no low GP items
                         
-                        cur.execute("SELECT name, code FROM pharma.pharmacies WHERE pharmacy_id=%s", (pid,))
+                        cur.execute("SELECT name FROM pharma.pharmacies WHERE pharmacy_id=%s", (pid,))
                         ph = cur.fetchone()
                         pname = ph["name"] if ph else str(pid)
-                        pcode = ph["code"] if ph else str(pid)
+                        pcode = str(pid)  # Use pharmacy_id as the code
                         # Create a detailed body with product names and GP percentages
                         product_details = []
                         for item in low_items:
