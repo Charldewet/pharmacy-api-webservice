@@ -168,7 +168,7 @@ async def broadcast_to_write_access_users(request: AccessBroadcastRequest):
 
 
 @router.get("/apns-config")
-async def get_apns_config(api_key: str = Depends(require_api_key)):
+async def get_apns_config():
     """Get Apple APNs configuration details for debugging"""
     
     config = {
