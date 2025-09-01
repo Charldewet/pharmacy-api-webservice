@@ -137,7 +137,7 @@ class ApplePushService:
     async def _send_to_endpoint(self, url: str, payload: dict, headers: dict, device_token: str, env: str) -> Dict[str, Any]:
         """Helper method to send notification to a specific APNs endpoint"""
         try:
-            async with httpx.AsyncClient(timeout=10, http2=True) as client:
+            async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.post(url, json=payload, headers=headers)
                 
                 # Log the full response for debugging
