@@ -89,17 +89,7 @@ class ApplePushService:
     ) -> Dict[str, Any]:
         """
         Send a push notification to an Apple device using HTTP/2
-        
-        Args:
-            device_token: The device push token
-            title: Notification title
-            body: Notification body
-            data: Custom data payload
-            sound: Sound to play (default: "default")
-            badge: Badge number to display
-            
-        Returns:
-            Dict with status and any error information
+        Try production first, then sandbox if it fails
         """
         if not self.private_key:
             return {"status": "error", "error": "APNs private key not loaded"}
@@ -125,9 +115,6 @@ class ApplePushService:
         if data:
             payload.update(data)
         
-        # Apple APNs HTTP/2 endpoint
-        url = f"https://api.push.apple.com/3/device/{device_token}"
-        
         headers = {
             "authorization": f"bearer {auth_token}",
             "apns-topic": self.bundle_id,
@@ -135,31 +122,45 @@ class ApplePushService:
             "content-type": "application/json"
         }
         
+        # Try production APNs first
+        production_url = f"https://api.push.apple.com/3/device/{device_token}"
+        result = await self._send_to_endpoint(production_url, payload, headers, device_token, "production")
+        
+        # If production fails with certain errors, try sandbox
+        if result.get("status") in ["bad_token", "error"] and "DeviceTokenNotForTopic" in result.get("error", ""):
+            sandbox_url = f"https://api.sandbox.push.apple.com/3/device/{device_token}"
+            sandbox_result = await self._send_to_endpoint(sandbox_url, payload, headers, device_token, "sandbox")
+            return sandbox_result
+        
+        return result
+    
+    async def _send_to_endpoint(self, url: str, payload: dict, headers: dict, device_token: str, env: str) -> Dict[str, Any]:
+        """Helper method to send notification to a specific APNs endpoint"""
         try:
             async with httpx.AsyncClient(timeout=10, http2=True) as client:
                 response = await client.post(url, json=payload, headers=headers)
                 
                 # Log the full response for debugging
-                logger.info(f"APNs Response - Status: {response.status_code}, Headers: {dict(response.headers)}, Body: {response.text}")
+                logger.info(f"APNs {env} Response - Status: {response.status_code}, Headers: {dict(response.headers)}, Body: {response.text}")
                 
                 if response.status_code == 200:
                     apns_id = response.headers.get("apns-id")
-                    logger.info(f"APNs SUCCESS - Token: {device_token[:20]}..., APNS-ID: {apns_id}")
+                    logger.info(f"APNs {env} SUCCESS - Token: {device_token[:20]}..., APNS-ID: {apns_id}")
                     return {"status": "success", "apns_id": apns_id}
                 elif response.status_code == 410:
                     # Device token is invalid/expired
-                    logger.warning(f"APNs UNREGISTERED - Token: {device_token[:20]}..., Response: {response.text}")
+                    logger.warning(f"APNs {env} UNREGISTERED - Token: {device_token[:20]}..., Response: {response.text}")
                     return {"status": "unregistered", "error": "Device token is invalid or expired"}
                 elif response.status_code == 400:
                     # Bad request (bad token format, etc.)
-                    logger.error(f"APNs BAD_TOKEN - Token: {device_token[:20]}..., Response: {response.text}")
-                    return {"status": "bad_token", "error": "Bad device token format"}
+                    logger.error(f"APNs {env} BAD_TOKEN - Token: {device_token[:20]}..., Response: {response.text}")
+                    return {"status": "bad_token", "error": f"Bad device token format ({env}): {response.text}"}
                 else:
-                    logger.error(f"APNs ERROR - Status: {response.status_code}, Token: {device_token[:20]}..., Response: {response.text}")
-                    return {"status": "error", "error": f"APNs error: {response.status_code} - {response.text}"}
+                    logger.error(f"APNs {env} ERROR - Status: {response.status_code}, Token: {device_token[:20]}..., Response: {response.text}")
+                    return {"status": "error", "error": f"APNs {env} error: {response.status_code} - {response.text}"}
                     
         except Exception as e:
-            logger.error(f"Error sending Apple push notification to {device_token[:20]}...: {e}")
+            logger.error(f"Error sending Apple push notification to {env} for {device_token[:20]}...: {e}")
             return {"status": "error", "error": str(e)}
     
     async def send_batch_notifications(
