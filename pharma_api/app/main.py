@@ -4,6 +4,7 @@ import orjson
 from .config import settings, CORS_ORIGINS, CORS_METHODS, CORS_HEADERS
 from .routers import pharmacies, days, stock, agg, logbook, products, usage, users
 from .routers import notifications
+from .routers import broadcast
 from .routers import authn
 
 class ORJSONResponse:
@@ -41,6 +42,7 @@ app.include_router(products.router)
 app.include_router(usage.router)
 app.include_router(users.router)
 app.include_router(notifications.router)
+app.include_router(broadcast.router)
 app.include_router(authn.router)
 
 @app.get("/health")

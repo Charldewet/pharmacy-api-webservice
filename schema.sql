@@ -249,3 +249,18 @@ CREATE TABLE IF NOT EXISTS pharma.notification_log (
   receipt_error     text,
   created_at        timestamptz NOT NULL DEFAULT now()
 );
+
+-- Track broadcast notification history
+CREATE TABLE IF NOT EXISTS pharma.broadcast_notifications (
+  id                bigserial PRIMARY KEY,
+  title             text NOT NULL,
+  body              text NOT NULL,
+  data              jsonb,
+  target_audience   text NOT NULL CHECK (target_audience IN ('all', 'pharmacy_specific', 'access_based')),
+  pharmacy_ids      integer[],
+  access_type       text CHECK (access_type IN ('read', 'write')),
+  sent_count        integer DEFAULT 0,
+  failed_count      integer DEFAULT 0,
+  created_by        text,
+  created_at        timestamptz NOT NULL DEFAULT now()
+);
