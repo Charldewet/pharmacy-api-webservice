@@ -47,10 +47,12 @@ class ApplePushService:
     def _generate_token(self):
         """Generate JWT token for Apple APNs authentication"""
         if not self.private_key:
+            logger.error("APNs private key not loaded - cannot generate token")
             return None
         
         now = int(time.time())
         if self.token and now < self.token_expiry:
+            logger.info("Using cached APNs token")
             return self.token
         
         # Token expires in 1 hour
@@ -70,6 +72,7 @@ class ApplePushService:
         try:
             self.token = jwt.encode(payload, self.private_key, algorithm='ES256', headers=headers)
             self.token_expiry = expiry
+            logger.info(f"Generated new APNs JWT token - Team: {self.team_id}, Key: {self.key_id}")
             return self.token
         except Exception as e:
             logger.error(f"Failed to generate Apple APNs token: {e}")
@@ -133,7 +136,7 @@ class ApplePushService:
         }
         
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=10, http2=True) as client:
                 response = await client.post(url, json=payload, headers=headers)
                 
                 # Log the full response for debugging
