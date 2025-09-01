@@ -136,20 +136,27 @@ class ApplePushService:
             async with httpx.AsyncClient(timeout=10) as client:
                 response = await client.post(url, json=payload, headers=headers)
                 
+                # Log the full response for debugging
+                logger.info(f"APNs Response - Status: {response.status_code}, Headers: {dict(response.headers)}, Body: {response.text}")
+                
                 if response.status_code == 200:
                     apns_id = response.headers.get("apns-id")
+                    logger.info(f"APNs SUCCESS - Token: {device_token[:20]}..., APNS-ID: {apns_id}")
                     return {"status": "success", "apns_id": apns_id}
                 elif response.status_code == 410:
                     # Device token is invalid/expired
+                    logger.warning(f"APNs UNREGISTERED - Token: {device_token[:20]}..., Response: {response.text}")
                     return {"status": "unregistered", "error": "Device token is invalid or expired"}
                 elif response.status_code == 400:
                     # Bad request (bad token format, etc.)
+                    logger.error(f"APNs BAD_TOKEN - Token: {device_token[:20]}..., Response: {response.text}")
                     return {"status": "bad_token", "error": "Bad device token format"}
                 else:
+                    logger.error(f"APNs ERROR - Status: {response.status_code}, Token: {device_token[:20]}..., Response: {response.text}")
                     return {"status": "error", "error": f"APNs error: {response.status_code} - {response.text}"}
                     
         except Exception as e:
-            logger.error(f"Error sending Apple push notification: {e}")
+            logger.error(f"Error sending Apple push notification to {device_token[:20]}...: {e}")
             return {"status": "error", "error": str(e)}
     
     async def send_batch_notifications(

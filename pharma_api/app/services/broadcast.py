@@ -76,10 +76,17 @@ class BroadcastService:
             batch = messages[i:i+100]
             try:
                 results = await _send_push_notifications(batch)
-                for result in results:
+                for idx, result in enumerate(results):
+                    device_info = devices[i + idx] if i + idx < len(devices) else {'push_token': 'unknown'}
+                    token_preview = device_info['push_token'][:20] + "..." if len(device_info['push_token']) > 20 else device_info['push_token']
+                    
                     if result.get("status") == "success":
+                        print(f"BROADCAST SUCCESS: {token_preview} - APNS-ID: {result.get('apns_id', 'N/A')}")
                         sent_count += 1
                     else:
+                        error_msg = result.get("error", "Unknown error")
+                        status = result.get("status", "unknown")
+                        print(f"BROADCAST FAILED: {token_preview} - Status: {status}, Error: {error_msg}")
                         failed_count += 1
             except Exception as e:
                 print(f"Broadcast batch error: {e}")
