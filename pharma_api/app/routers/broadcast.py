@@ -167,7 +167,7 @@ async def broadcast_to_write_access_users(request: AccessBroadcastRequest):
         raise HTTPException(status_code=500, detail='Write access broadcast failed') 
 
 
-@router.get("/push/apns-config")
+@router.get("/apns-config")
 async def get_apns_config(api_key: str = Depends(require_api_key)):
     """Get Apple APNs configuration details for debugging"""
     
