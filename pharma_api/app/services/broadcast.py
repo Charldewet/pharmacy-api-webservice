@@ -77,7 +77,7 @@ class BroadcastService:
             try:
                 results = await _send_push_notifications(batch)
                 for result in results:
-                    if result.get("status") == "ok":
+                    if result.get("status") == "success":
                         sent_count += 1
                     else:
                         failed_count += 1
