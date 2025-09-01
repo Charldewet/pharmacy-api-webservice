@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
+from datetime import datetime
 from ..auth import require_api_key
 from ..services.broadcast import BroadcastService
 import os
@@ -18,6 +19,8 @@ class BroadcastRequest(BaseModel):
     targetAudience: Optional[str] = Field(default='all', description="Target audience: 'all', 'pharmacy_specific', or 'access_based'")
     pharmacyIds: Optional[List[int]] = Field(default_factory=list, description="Array of pharmacy IDs for targeted sends")
     accessType: Optional[str] = Field(default=None, description="Access type: 'read' or 'write' for access-based targeting")
+    modalType: Optional[str] = Field(default='broadcast', description="Modal type: 'broadcast', 'alert', 'promotion', etc.")
+    showModal: Optional[bool] = Field(default=True, description="Whether to show modal when notification is tapped")
 
 
 class BroadcastResponse(BaseModel):
@@ -54,10 +57,18 @@ async def broadcast_to_all(request: BroadcastRequest):
     - **accessType**: Access type ('read' or 'write') for access-based targeting
     """
     try:
+        # Add modal configuration to data
+        broadcast_data = {
+            **request.data,
+            "modalType": request.modalType,
+            "showModal": request.showModal,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
         result = await BroadcastService.send_broadcast(
             title=request.title,
             body=request.body,
-            data=request.data,
+            data=broadcast_data,
             target_audience=request.targetAudience,
             pharmacy_ids=request.pharmacyIds,
             access_type=request.accessType,
@@ -199,6 +210,8 @@ class TestUserPushRequest(BaseModel):
     title: str = Field("Test Push", description="Notification title")
     body: str = Field("Hello from test endpoint", description="Notification body")
     data: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional data payload")
+    modalType: Optional[str] = Field(default='test', description="Modal type to show")
+    showModal: Optional[bool] = Field(default=True, description="Whether to show modal")
 
 
 @router.post("/broadcast/test/user/{user_id}")
@@ -223,7 +236,20 @@ async def send_test_push_to_user(user_id: int, request: TestUserPushRequest):
                 "sound": "default",
                 "title": request.title,
                 "body": request.body,
-                "data": {**(request.data or {}), "type": "TEST"},
+                "data": {
+                    **(request.data or {}),
+                    "type": "TEST",
+                    "showModal": request.showModal,
+                    "modalType": request.modalType,
+                    "modalData": {
+                        "title": request.title,
+                        "body": request.body,
+                        "type": "TEST",
+                        "modalType": request.modalType,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        **(request.data or {})
+                    }
+                },
             })
 
     if not messages:

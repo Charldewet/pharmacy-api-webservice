@@ -4,7 +4,6 @@ import json
 from ..db import get_conn
 from ..utils.crypto import decrypt_token
 from .scheduler import _send_push_notifications
-from ..utils.notifications_store import insert_user_notification
 
 
 class BroadcastService:
@@ -65,6 +64,16 @@ class BroadcastService:
                 "data": {
                     "type": "BROADCAST",
                     "category": data.get("category", "general"),
+                    "showModal": True,  # Flag to trigger modal opening
+                    "modalType": data.get("modalType", "broadcast"),  # Type of modal to show
+                    "modalData": {
+                        "title": title,
+                        "body": body,
+                        "category": data.get("category", "general"),
+                        "timestamp": data.get("timestamp"),
+                        "source": data.get("source", "system"),
+                        **data
+                    },
                     **data
                 }
             })
@@ -75,14 +84,6 @@ class BroadcastService:
         
         for i in range(0, len(messages), 100):
             batch = messages[i:i+100]
-            # Persist notifications to user_notifications for each device in batch using known user_id
-            with get_conn() as conn, conn.cursor() as cur:
-                for idx, device in enumerate(devices[i:i+100]):
-                    uid = device.get('user_id')
-                    if uid is None:
-                        continue
-                    insert_user_notification(cur, uid, batch[idx].get('title',''), batch[idx].get('body',''), batch[idx].get('data', {}))
-                conn.commit()
             try:
                 results = await _send_push_notifications(batch)
                 for idx, result in enumerate(results):
@@ -133,7 +134,7 @@ class BroadcastService:
             if target_audience == 'all':
                 # Get all active devices
                 cur.execute("""
-                    SELECT d.user_id, d.push_token_enc, d.platform
+                    SELECT d.push_token_enc, d.platform
                     FROM pharma.devices d
                     WHERE d.disabled_at IS NULL
                 """)
@@ -142,7 +143,7 @@ class BroadcastService:
                 # Get devices for users with access to specific pharmacies
                 placeholders = ','.join(['%s'] * len(pharmacy_ids))
                 cur.execute(f"""
-                    SELECT DISTINCT d.user_id, d.push_token_enc, d.platform
+                    SELECT DISTINCT d.push_token_enc, d.platform
                     FROM pharma.devices d
                     JOIN pharma.user_pharmacies up ON d.user_id = up.user_id
                     WHERE d.disabled_at IS NULL
@@ -154,7 +155,7 @@ class BroadcastService:
                 placeholders = ','.join(['%s'] * len(pharmacy_ids))
                 access_column = 'can_read' if access_type == 'read' else 'can_write'
                 cur.execute(f"""
-                    SELECT DISTINCT d.user_id, d.push_token_enc, d.platform
+                    SELECT DISTINCT d.push_token_enc, d.platform
                     FROM pharma.devices d
                     JOIN pharma.user_pharmacies up ON d.user_id = up.user_id
                     WHERE d.disabled_at IS NULL
@@ -173,7 +174,6 @@ class BroadcastService:
                 try:
                     decrypted_token = decrypt_token(row['push_token_enc'])
                     devices.append({
-                        'user_id': row['user_id'],
                         'push_token': decrypted_token,
                         'platform': row['platform']
                     })
