@@ -127,7 +127,7 @@ class ApplePushService:
         result = await self._send_to_endpoint(production_url, payload, headers, device_token, "production")
         
         # If production fails with certain errors, try sandbox
-        if result.get("status") in ["bad_token", "error"] and "DeviceTokenNotForTopic" in result.get("error", ""):
+        if result.get("status") in ["bad_token", "error"] and any(err in (result.get("error") or "") for err in ["DeviceTokenNotForTopic", "BadDeviceToken"]):
             sandbox_url = f"https://api.sandbox.push.apple.com/3/device/{device_token}"
             sandbox_result = await self._send_to_endpoint(sandbox_url, payload, headers, device_token, "sandbox")
             return sandbox_result
@@ -137,7 +137,7 @@ class ApplePushService:
     async def _send_to_endpoint(self, url: str, payload: dict, headers: dict, device_token: str, env: str) -> Dict[str, Any]:
         """Helper method to send notification to a specific APNs endpoint"""
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=30, http2=True) as client:
                 response = await client.post(url, json=payload, headers=headers)
                 
                 # Log the full response for debugging

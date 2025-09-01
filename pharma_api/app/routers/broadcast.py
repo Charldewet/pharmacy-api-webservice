@@ -4,6 +4,9 @@ from typing import List, Optional, Dict, Any
 from ..auth import require_api_key
 from ..services.broadcast import BroadcastService
 import os
+from ..db import get_conn
+from ..utils.crypto import decrypt_token
+from ..services.scheduler import _send_push_notifications
 
 router = APIRouter(prefix="/push", tags=["broadcast"], dependencies=[Depends(require_api_key)])
 
@@ -189,4 +192,45 @@ async def get_apns_config():
         except Exception as e:
             config["private_key_error"] = str(e)
     
-    return config 
+    return config
+
+
+class TestUserPushRequest(BaseModel):
+    title: str = Field("Test Push", description="Notification title")
+    body: str = Field("Hello from test endpoint", description="Notification body")
+    data: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional data payload")
+
+
+@router.post("/broadcast/test/user/{user_id}")
+async def send_test_push_to_user(user_id: int, request: TestUserPushRequest):
+    """Send a one-off test notification to all active devices for a specific user."""
+    messages: list[dict[str, Any]] = []
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT device_id, platform, push_token_enc
+            FROM pharma.devices
+            WHERE user_id = %s AND disabled_at IS NULL
+            ORDER BY updated_at DESC
+            """,
+            (user_id,),
+        )
+        rows = cur.fetchall() or []
+        for r in rows:
+            token_plain = decrypt_token(r["push_token_enc"])  # app handles decryption key
+            messages.append({
+                "to": token_plain,
+                "sound": "default",
+                "title": request.title,
+                "body": request.body,
+                "data": {**(request.data or {}), "type": "TEST"},
+            })
+
+    if not messages:
+        return {"success": True, "sent": 0, "failed": 0, "totalDevices": 0, "message": "No active devices for user"}
+
+    results = await _send_push_notifications(messages)
+    # Summarize
+    sent = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
+    failed = len(results) - sent
+    return {"success": True, "sent": sent, "failed": failed, "totalDevices": len(messages), "results": results} 
