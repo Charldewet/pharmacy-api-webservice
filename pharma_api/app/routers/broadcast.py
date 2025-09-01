@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from ..auth import require_api_key
 from ..services.broadcast import BroadcastService
+import os
 
 router = APIRouter(prefix="/push", tags=["broadcast"], dependencies=[Depends(require_api_key)])
 
@@ -164,3 +165,28 @@ async def broadcast_to_write_access_users(request: AccessBroadcastRequest):
     except Exception as error:
         print(f'Write access broadcast error: {error}')
         raise HTTPException(status_code=500, detail='Write access broadcast failed') 
+
+
+@router.get("/push/apns-config")
+async def get_apns_config(api_key: str = Depends(require_api_key)):
+    """Get Apple APNs configuration details for debugging"""
+    
+    config = {
+        "team_id": os.getenv("APPLE_TEAM_ID", "NOT_SET"),
+        "key_id": os.getenv("APPLE_KEY_ID", "NOT_SET"), 
+        "bundle_id": os.getenv("APPLE_BUNDLE_ID", "NOT_SET"),
+        "private_key_path": os.getenv("APPLE_PRIVATE_KEY_PATH", "NOT_SET"),
+        "private_key_exists": False
+    }
+    
+    # Check if private key file exists
+    if config["private_key_path"] != "NOT_SET":
+        try:
+            with open(config["private_key_path"], 'r') as f:
+                key_content = f.read()
+                config["private_key_exists"] = True
+                config["private_key_preview"] = key_content[:100] + "..." if len(key_content) > 100 else key_content
+        except Exception as e:
+            config["private_key_error"] = str(e)
+    
+    return config 
