@@ -26,7 +26,7 @@ IMAP_PASS = os.environ.get("REITZ_GMAIL_APP_PASSWORD")
 IMAP_FOLDER = os.environ.get("IMAP_FOLDER", "INBOX")
 GMAIL_LABEL = os.environ.get("GMAIL_LABEL")
 LOOKBACK_HOURS = int(os.environ.get("LOOKBACK_HOURS", "5"))
-MAX_MESSAGES = int(os.environ.get("MAX_MESSAGES", "10"))  # safety cap
+MAX_MESSAGES = int(os.environ.get("MAX_MESSAGES", "500"))  # safety cap
 
 # Validate required environment variables
 if not DSN:
