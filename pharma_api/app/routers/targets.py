@@ -9,8 +9,11 @@ import calendar
 router = APIRouter(prefix="/api/targets", tags=["targets"])
 
 class TargetValue(BaseModel):
-    date: date = Field(..., description="Target date (YYYY-MM-DD)")
+    target_date: date = Field(..., description="Target date (YYYY-MM-DD)", alias="date")
     value: float = Field(..., ge=0, description="Target value (must be >= 0)")
+    
+    class Config:
+        populate_by_name = True
 
 class SaveTargetsRequest(BaseModel):
     pharmacy_id: int = Field(..., description="Pharmacy ID")
@@ -22,8 +25,11 @@ class SaveTargetsResponse(BaseModel):
     saved_count: int
 
 class TargetResponse(BaseModel):
-    date: date
+    target_date: date = Field(..., alias="date")
     value: float
+    
+    class Config:
+        populate_by_name = True
 
 class LoadTargetsResponse(BaseModel):
     pharmacy_id: int
@@ -72,7 +78,7 @@ async def save_targets(request: SaveTargetsRequest, user_id: int = Depends(get_c
                     target_value = EXCLUDED.target_value,
                     updated_at = now()
                 """,
-                (request.pharmacy_id, target.date, target.value)
+                (request.pharmacy_id, target.target_date, target.value)
             )
             saved_count += 1
         
@@ -130,7 +136,7 @@ async def load_targets(
         
         rows = cur.fetchall()
         targets = [
-            TargetResponse(date=row["target_date"], value=float(row["target_value"]))
+            TargetResponse(target_date=row["target_date"], value=float(row["target_value"]))
             for row in rows
         ]
         
