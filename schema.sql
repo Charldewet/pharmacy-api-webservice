@@ -264,3 +264,18 @@ CREATE TABLE IF NOT EXISTS pharma.broadcast_notifications (
   created_by        text,
   created_at        timestamptz NOT NULL DEFAULT now()
 );
+
+-- ========== PHARMACY TARGETS ==========
+-- Store daily target values for pharmacies
+CREATE TABLE IF NOT EXISTS pharma.pharmacy_targets (
+  id            bigserial PRIMARY KEY,
+  pharmacy_id   integer NOT NULL REFERENCES pharma.pharmacies(pharmacy_id) ON DELETE CASCADE,
+  target_date   date NOT NULL,
+  target_value  numeric(10,2) NOT NULL CHECK (target_value >= 0),
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  updated_at    timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(pharmacy_id, target_date)
+);
+
+-- Index for efficient queries
+CREATE INDEX IF NOT EXISTS idx_pharmacy_targets_lookup ON pharma.pharmacy_targets(pharmacy_id, target_date);
