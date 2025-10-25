@@ -12,3 +12,4 @@ class PharmacyId(int, Enum):
     ROOS = 3
     VILLIERS = 4
     TUGELA = 5
+    UMDONI = 101

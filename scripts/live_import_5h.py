@@ -21,8 +21,8 @@ if str(ROOT) not in sys.path:
 load_dotenv(find_dotenv(), override=False)
 
 DSN = os.environ.get("DATABASE_URL")
-IMAP_USER = os.environ.get("REITZ_GMAIL_USERNAME")
-IMAP_PASS = os.environ.get("REITZ_GMAIL_APP_PASSWORD")
+IMAP_USER = os.environ.get("GMAIL_USER")
+IMAP_PASS = os.environ.get("GMAIL_PASSWORD")
 IMAP_FOLDER = os.environ.get("IMAP_FOLDER", "INBOX")
 GMAIL_LABEL = os.environ.get("GMAIL_LABEL")
 LOOKBACK_HOURS = int(os.environ.get("LOOKBACK_HOURS", "5"))
