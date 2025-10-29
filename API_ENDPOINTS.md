@@ -124,11 +124,70 @@ Response: Products with lowest gross profit percentage with:
 Use Case: Margin analysis, pricing optimization
 ```
 
+### **9. Best Sellers by Quantity (Date Range)**
+```http
+GET /pharmacies/{pharmacy_id}/stock-activity/by-quantity/range?from={YYYY-MM-DD}&to={YYYY-MM-DD}&limit={number}
+
+# Examples:
+GET /pharmacies/1/stock-activity/by-quantity/range?from=2025-10-01&to=2025-10-28&limit=20
+GET /pharmacies/101/stock-activity/by-quantity/range?from=2025-10-01&to=2025-10-28&limit=50
+
+Response: Top-selling products by quantity across date range:
+[
+  {
+    "product_name": "PANADO TABS 500MG 24'S",
+    "nappi_code": "123456",
+    "quantity_sold": 245.0,
+    "total_sales": 12450.50,
+    "gp_percent": 35.2
+  }
+]
+Use Case: Period-based volume analysis, trending products, inventory planning
+```
+
+### **10. Low GP Products (Date Range)**
+```http
+GET /pharmacies/{pharmacy_id}/stock-activity/low-gp/range?from={YYYY-MM-DD}&to={YYYY-MM-DD}&threshold={gp_percent}&limit={number}&exclude_pdst={bool}
+
+# Examples:
+GET /pharmacies/1/stock-activity/low-gp/range?from=2025-10-01&to=2025-10-28&threshold=20&limit=100
+GET /pharmacies/101/stock-activity/low-gp/range?from=2025-10-01&to=2025-10-28&threshold=15&exclude_pdst=true&limit=50
+
+Query Parameters:
+- from (required): Start date YYYY-MM-DD
+- to (required): End date YYYY-MM-DD
+- threshold (required): Maximum GP% to include (e.g., 20 for GP% ≤ 20%)
+- limit (optional): Number of items to return (default: 100, max: 500)
+- exclude_pdst (optional): Boolean to exclude PDST/KSAA products (default: false)
+
+Response: Products with GP% at or below threshold across date range:
+[
+  {
+    "product_name": "DISPRIN TABS 300MG 24'S",
+    "nappi_code": "789012",
+    "quantity_sold": 12.0,
+    "total_sales": 450.00,
+    "total_cost": 410.00,
+    "gp_value": 40.00,
+    "gp_percent": 8.9
+  }
+]
+
+Business Rules:
+- Only includes products with actual sales in the date range
+- Excludes products with zero or negative turnover
+- Filters out PDST/KSAA department codes if exclude_pdst=true
+- Aggregates all sales for each product across the entire date range
+- Sorted by GP% ascending (worst GP first)
+
+Use Case: Margin improvement, pricing strategy, unprofitable product identification
+```
+
 ---
 
 ## 📋 **Product Performance Analytics**
 
-### **9. Product Sales - Detailed with Daily Breakdown**
+### **11. Product Sales - Detailed with Daily Breakdown**
 ```http
 GET /products/{product_code}/sales?from_date={YYYY-MM-DD}&to_date={YYYY-MM-DD}&pharmacy_id={id}
 
@@ -142,7 +201,7 @@ Response: Complete product performance including:
 Use Case: Product performance tracking, trend analysis
 ```
 
-### **10. Product Sales - Summary Only**
+### **12. Product Sales - Summary Only**
 ```http
 GET /products/{product_code}/sales/summary?from_date={YYYY-MM-DD}&to_date={YYYY-MM-DD}&pharmacy_id={id}
 
@@ -153,7 +212,7 @@ Response: Product performance summary only (no daily breakdown)
 Use Case: Quick product overviews, summary dashboards
 ```
 
-### **11. Product Search - Find Products**
+### **13. Product Search - Find Products**
 ```http
 GET /products/search?query={search_term}&page={page}&page_size={size}&pharmacy_id={id}
 
@@ -168,7 +227,7 @@ Response: Paginated list of products matching search term with:
 Use Case: Product discovery, search functionality, product lookup
 ```
 
-### **12. Product Information - Basic Details**
+### **14. Product Information - Basic Details**
 ```http
 GET /products/{product_code}?pharmacy_id={id}
 
@@ -185,7 +244,7 @@ Use Case: Product details without requiring date ranges, product lookup
 
 ## 📊 **Reporting & Coverage**
 
-### **11. Logbook - Report Coverage**
+### **15. Logbook - Report Coverage**
 ```http
 # Get missing reports only
 GET /pharmacies/{pharmacy_id}/logbook?from={YYYY-MM-DD}&to={YYYY-MM-DD}&missingOnly=true
@@ -311,6 +370,44 @@ const getProductInfo = async (productCode, pharmacyId = 1) => {
 };
 ```
 
+#### **Get Best Sellers by Quantity (Date Range):**
+```javascript
+const getBestSellersByQuantity = async (pharmacyId, fromDate, toDate, limit = 20) => {
+  const response = await fetch(
+    `https://pharmacy-api-webservice.onrender.com/pharmacies/${pharmacyId}/stock-activity/by-quantity/range?from=${fromDate}&to=${toDate}&limit=${limit}`,
+    {
+      headers: {
+        'Authorization': `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  );
+  return response.json();
+};
+
+// Example usage:
+// const bestSellers = await getBestSellersByQuantity(101, '2025-10-01', '2025-10-28', 20);
+```
+
+#### **Get Low GP Products (Date Range):**
+```javascript
+const getLowGPProducts = async (pharmacyId, fromDate, toDate, threshold, excludePdst = false, limit = 100) => {
+  const response = await fetch(
+    `https://pharmacy-api-webservice.onrender.com/pharmacies/${pharmacyId}/stock-activity/low-gp/range?from=${fromDate}&to=${toDate}&threshold=${threshold}&exclude_pdst=${excludePdst}&limit=${limit}`,
+    {
+      headers: {
+        'Authorization': `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  );
+  return response.json();
+};
+
+// Example usage:
+// const lowGPProducts = await getLowGPProducts(101, '2025-10-01', '2025-10-28', 20, true, 50);
+```
+
 ---
 
 ## 🎯 **Common Use Cases by Endpoint**
@@ -322,8 +419,10 @@ const getProductInfo = async (productCode, pharmacyId = 1) => {
 | **Monthly Tracking** | `/pharmacies/{id}/mtd` |
 | **Annual Summary** | `/pharmacies/{id}/ytd` |
 | **Product Analysis** | `/products/{code}/sales`, `/pharmacies/{id}/stock-activity` |
-| **Best Sellers** | `/pharmacies/{id}/stock-activity` (by value/quantity) |
-| **Margin Analysis** | `/pharmacies/{id}/stock-activity/worst-gp` |
+| **Best Sellers (Single Day)** | `/pharmacies/{id}/stock-activity/by-quantity` |
+| **Best Sellers (Period)** | `/pharmacies/{id}/stock-activity/by-quantity/range` |
+| **Margin Analysis (Single Day)** | `/pharmacies/{id}/stock-activity/worst-gp` |
+| **Margin Analysis (Period)** | `/pharmacies/{id}/stock-activity/low-gp/range` |
 | **Report Monitoring** | `/pharmacies/{id}/logbook` |
 
 ---

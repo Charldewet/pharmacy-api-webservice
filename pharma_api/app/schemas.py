@@ -68,3 +68,25 @@ class ProductUsage(BaseModel):
 
 class ProductUsagePage(BaseModel):
     items: List[ProductUsage]
+
+class BestSellerItem(BaseModel):
+    product_name: Optional[str] = None
+    nappi_code: str
+    quantity_sold: Optional[float] = None
+    total_sales: Optional[float] = None
+    gp_percent: Optional[float] = None
+
+class BestSellerPage(BaseModel):
+    items: List[BestSellerItem]
+
+class LowGPItem(BaseModel):
+    product_name: Optional[str] = None
+    nappi_code: str
+    quantity_sold: Optional[float] = None
+    total_sales: Optional[float] = None
+    total_cost: Optional[float] = None
+    gp_value: Optional[float] = None
+    gp_percent: Optional[float] = None
+
+class LowGPPage(BaseModel):
+    items: List[LowGPItem]
