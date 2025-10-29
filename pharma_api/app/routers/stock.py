@@ -218,11 +218,17 @@ def low_gp_products(
     Returns products with GP% at or below the specified threshold within the date range,
     aggregated across all days. Excludes products with zero or negative turnover.
     """
-    pdst_filter = ""
+    # Build PDST/KSAA exclusion filter (use pattern matching for PDST## and KSAA## codes)
+    # Database has codes like PDST01, PDST02, PDST08, KSAA01, etc. (not just "PDST" or "KSAA")
     if exclude_pdst:
-        pdst_filter = "AND d.department_code NOT IN ('PDST', 'KSAA')"
+        pdst_filter_group = "AND f.department_code NOT LIKE 'PDST%' AND f.department_code NOT LIKE 'KSAA%'"
+        pdst_filter_individual = "AND d.department_code NOT LIKE 'PDST%' AND d.department_code NOT LIKE 'KSAA%'"
+    else:
+        pdst_filter_group = ""
+        pdst_filter_individual = ""
     
     if pid == 100:
+        # For group view, department_code comes directly from view
         sql = f"""
         SELECT 
             pr.description as product_name,
@@ -238,9 +244,8 @@ def low_gp_products(
             END as gp_percent
         FROM pharma.v_stock_activity_group f
         JOIN pharma.products pr ON pr.product_id = f.product_id
-        LEFT JOIN pharma.departments d ON d.department_code = f.department_code
         WHERE f.business_date BETWEEN %s AND %s
-          {pdst_filter}
+          {pdst_filter_group}
         GROUP BY pr.product_code, pr.description
         HAVING SUM(f.sales_val) > 0 
           AND (SUM(f.gp_value) / NULLIF(SUM(f.sales_val), 0) * 100) <= %s
@@ -267,7 +272,7 @@ def low_gp_products(
         LEFT JOIN pharma.departments d ON d.department_id = f.department_id
         WHERE f.pharmacy_id = %s 
           AND f.business_date BETWEEN %s AND %s
-          {pdst_filter}
+          {pdst_filter_individual}
         GROUP BY pr.product_code, pr.description
         HAVING SUM(f.sales_val) > 0 
           AND (SUM(f.gp_value) / NULLIF(SUM(f.sales_val), 0) * 100) <= %s
