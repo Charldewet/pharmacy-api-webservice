@@ -220,9 +220,10 @@ def low_gp_products(
     """
     # Build PDST/KSAA exclusion filter (use pattern matching for PDST## and KSAA## codes)
     # Database has codes like PDST01, PDST02, PDST08, KSAA01, etc. (not just "PDST" or "KSAA")
+    # Include NULL check to keep products without a department assigned
     if exclude_pdst:
-        pdst_filter_group = "AND f.department_code NOT LIKE 'PDST%' AND f.department_code NOT LIKE 'KSAA%'"
-        pdst_filter_individual = "AND d.department_code NOT LIKE 'PDST%' AND d.department_code NOT LIKE 'KSAA%'"
+        pdst_filter_group = "AND (f.department_code IS NULL OR (f.department_code NOT LIKE 'PDST%' AND f.department_code NOT LIKE 'KSAA%'))"
+        pdst_filter_individual = "AND (d.department_code IS NULL OR (d.department_code NOT LIKE 'PDST%' AND d.department_code NOT LIKE 'KSAA%'))"
     else:
         pdst_filter_group = ""
         pdst_filter_individual = ""
