@@ -419,4 +419,73 @@ def get_product_sales_summary(
                 sales_days=summary['sales_days'],
                 first_sale_date=summary['first_sale_date'],
                 last_sale_date=summary['last_sale_date']
+            )
+
+class ProductStockOnHand(BaseModel):
+    product_code: str
+    description: Optional[str] = None
+    on_hand: Optional[float] = None
+    business_date: date
+
+@router.get("/{product_code}/stock", response_model=ProductStockOnHand)
+def get_product_stock_on_hand(
+    product_code: str,
+    date: date = Query(..., description="Business date (YYYY-MM-DD)"),
+    pharmacy_id: int = Query(1, description="Pharmacy ID (default: 1)")
+):
+    """
+    Get Stock On Hand (SOH) for a specific product on a specific date.
+    Returns the on_hand value from the most recent GP report for that product/date.
+    Returns 0 if the product had no activity on that date.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if pharmacy_id == 100:
+                # Group view
+                sql = """
+                    SELECT 
+                        f.product_code,
+                        f.description,
+                        f.on_hand,
+                        f.business_date
+                    FROM pharma.v_stock_activity_group f
+                    WHERE f.product_code = %s
+                      AND f.business_date = %s
+                    LIMIT 1
+                """
+                params = (product_code, date)
+            else:
+                # Single pharmacy
+                sql = """
+                    SELECT 
+                        pr.product_code,
+                        pr.description,
+                        f.on_hand,
+                        f.business_date
+                    FROM pharma.fact_stock_activity f
+                    JOIN pharma.products pr ON pr.product_id = f.product_id
+                    WHERE f.pharmacy_id = %s
+                      AND pr.product_code = %s
+                      AND f.business_date = %s
+                    LIMIT 1
+                """
+                params = (pharmacy_id, product_code, date)
+            
+            cur.execute(sql, params)
+            row = cur.fetchone()
+            
+            if not row:
+                # Product not found - return 0 for on_hand
+                return ProductStockOnHand(
+                    product_code=product_code,
+                    description=None,
+                    on_hand=0.0,
+                    business_date=date
+                )
+            
+            return ProductStockOnHand(
+                product_code=row['product_code'],
+                description=row['description'],
+                on_hand=row['on_hand'] if row['on_hand'] is not None else 0.0,
+                business_date=row['business_date']
             ) 
