@@ -6,6 +6,7 @@ from .routers import pharmacies, days, stock, agg, logbook, products, usage, use
 from .routers import notifications
 from .routers import broadcast
 from .routers import authn
+from .routers import admin
 
 class ORJSONResponse:
     media_type = "application/json"
@@ -44,6 +45,7 @@ app.include_router(users.router)
 app.include_router(notifications.router)
 app.include_router(broadcast.router)
 app.include_router(authn.router)
+app.include_router(admin.router)
 
 @app.get("/health")
 async def health_check():
