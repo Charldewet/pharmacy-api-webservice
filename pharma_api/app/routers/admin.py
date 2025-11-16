@@ -1,20 +1,24 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from fastapi.responses import FileResponse
 from typing import List, Optional, Dict
 from pydantic import BaseModel, EmailStr
 from datetime import date, datetime
+from pathlib import Path
 from ..db import get_conn
 from ..auth import get_current_user_id
 import hashlib
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-# Charl's user_id is 2
+# Admin user IDs
 CHARL_USER_ID = 2
+AMIN_USER_ID = 9
+ADMIN_USER_IDS = {CHARL_USER_ID, AMIN_USER_ID}
 
 def require_charl(user_id: int = Depends(get_current_user_id)) -> int:
-    """Only allow Charl to access admin endpoints"""
-    if user_id != CHARL_USER_ID:
-        raise HTTPException(status_code=403, detail="Admin access restricted to Charl only")
+    """Only allow admin users (Charl and Amin) to access admin endpoints"""
+    if user_id not in ADMIN_USER_IDS:
+        raise HTTPException(status_code=403, detail="Admin access restricted to authorized users only")
     return user_id
 
 def check_pharmacy_access(user_id: int, pharmacy_id: int, require_write: bool = False) -> None:
@@ -498,4 +502,10 @@ def delete_pharmacy_target(
             "success": True,
             "message": "Target deleted successfully"
         }
+
+@router.get("/", response_class=FileResponse)
+def admin_interface():
+    """Serve the admin interface HTML page"""
+    template_path = Path(__file__).parent.parent.parent / "templates" / "admin.html"
+    return FileResponse(template_path)
 
