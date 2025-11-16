@@ -8,7 +8,6 @@ from typing import Optional, Dict, Any
 from pdfminer.high_level import extract_text
 from cryptography.fernet import Fernet
 import base64
-import os
 
 
 def is_medical_aid_control_account(name: Optional[str]) -> bool:
@@ -221,71 +220,41 @@ def create_sms_template(debtor: Dict[str, Any], pharmacy: Dict[str, Any], arrear
     )
 
 
-def get_encryption_key() -> bytes:
-    """Get encryption key from environment or generate a default (for development only)."""
-    key_str = os.getenv('TOKEN_ENCRYPTION_KEY', '')
-    if not key_str:
-        # For development - in production, this should be set in environment
-        # Generate a key: Fernet.generate_key()
-        raise ValueError("TOKEN_ENCRYPTION_KEY environment variable not set. Generate one with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'")
-    
-    # If it's a base64 string, decode it
+def _get_fernet():
+    """Get Fernet instance using existing TOKEN_ENCRYPTION_KEY from settings."""
+    from ..config import settings
+    if not settings.TOKEN_ENCRYPTION_KEY:
+        raise ValueError("TOKEN_ENCRYPTION_KEY not configured in settings")
     try:
-        decoded = base64.urlsafe_b64decode(key_str)
-        # Ensure it's 32 bytes (Fernet requirement)
-        if len(decoded) == 32:
-            return decoded
-        # If not 32 bytes, pad or truncate
-        if len(decoded) < 32:
-            return decoded.ljust(32, b'0')
-        return decoded[:32]
-    except Exception:
-        # If it's already bytes or hex, try to use it directly
-        if isinstance(key_str, bytes):
-            key_bytes = key_str
-        else:
-            key_bytes = key_str.encode()
-        
-        # Ensure 32 bytes
-        if len(key_bytes) < 32:
-            return key_bytes.ljust(32, b'0')
-        return key_bytes[:32]
+        return Fernet(settings.TOKEN_ENCRYPTION_KEY.encode("utf-8"))
+    except Exception as e:
+        raise ValueError(f"Invalid TOKEN_ENCRYPTION_KEY: {str(e)}")
 
 
-def encrypt_api_key(api_key: str, encryption_key: Optional[bytes] = None) -> str:
-    """Encrypt API key before storing."""
+def encrypt_api_key(api_key: str) -> str:
+    """Encrypt API key before storing using existing TOKEN_ENCRYPTION_KEY."""
     if not api_key:
         return ''
     
-    if encryption_key is None:
-        encryption_key = get_encryption_key()
-    
-    # Ensure key is 32 bytes (Fernet requirement)
-    if len(encryption_key) != 32:
-        # Use first 32 bytes or pad
-        encryption_key = encryption_key[:32].ljust(32, b'0')
-    
-    f = Fernet(base64.urlsafe_b64encode(encryption_key))
-    encrypted = f.encrypt(api_key.encode())
-    return base64.urlsafe_b64encode(encrypted).decode()
+    try:
+        f = _get_fernet()
+        encrypted = f.encrypt(api_key.encode("utf-8"))
+        # Store as base64 string for database storage
+        return base64.urlsafe_b64encode(encrypted).decode("utf-8")
+    except Exception as e:
+        raise ValueError(f"Failed to encrypt API key: {str(e)}")
 
 
-def decrypt_api_key(encrypted_key: str, encryption_key: Optional[bytes] = None) -> str:
-    """Decrypt API key when needed."""
+def decrypt_api_key(encrypted_key: str) -> str:
+    """Decrypt API key when needed using existing TOKEN_ENCRYPTION_KEY."""
     if not encrypted_key:
         return ''
     
-    if encryption_key is None:
-        encryption_key = get_encryption_key()
-    
-    # Ensure key is 32 bytes
-    if len(encryption_key) != 32:
-        encryption_key = encryption_key[:32].ljust(32, b'0')
-    
     try:
-        f = Fernet(base64.urlsafe_b64encode(encryption_key))
-        decrypted_bytes = base64.urlsafe_b64decode(encrypted_key.encode())
-        return f.decrypt(decrypted_bytes).decode()
+        f = _get_fernet()
+        # Decode from base64 string
+        encrypted_bytes = base64.urlsafe_b64decode(encrypted_key.encode("utf-8"))
+        return f.decrypt(encrypted_bytes).decode("utf-8")
     except Exception as e:
         raise ValueError(f"Failed to decrypt API key: {str(e)}")
 

@@ -57,19 +57,19 @@ def configure_pharmacy(pharmacy_id: int, email: str = None, phone: str = None,
             encrypted_key = encrypt_api_key(sendgrid_api_key)
             updates.append("sendgrid_api_key = %s")
             params.append(encrypted_key)
-            print("  ✓ Encrypted and stored SendGrid API key")
+            print("  ✓ Encrypted and stored SendGrid API key (using existing TOKEN_ENCRYPTION_KEY)")
         
         if smsportal_client_id:
             encrypted_id = encrypt_api_key(smsportal_client_id)
             updates.append("smsportal_client_id = %s")
             params.append(encrypted_id)
-            print("  ✓ Encrypted and stored SMS Portal client ID")
+            print("  ✓ Encrypted and stored SMS Portal client ID (using existing TOKEN_ENCRYPTION_KEY)")
         
         if smsportal_api_secret:
             encrypted_secret = encrypt_api_key(smsportal_api_secret)
             updates.append("smsportal_api_secret = %s")
             params.append(encrypted_secret)
-            print("  ✓ Encrypted and stored SMS Portal API secret")
+            print("  ✓ Encrypted and stored SMS Portal API secret (using existing TOKEN_ENCRYPTION_KEY)")
         
         if not updates:
             print("  ✗ No updates provided")
