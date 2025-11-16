@@ -6,10 +6,19 @@ from fastapi.responses import StreamingResponse, FileResponse
 from typing import List, Optional
 from datetime import datetime
 import os
+import sys
 import tempfile
 import csv
 import io
 from pathlib import Path
+
+# Add project root to Python path to import PDF_PARSER_COMPLETE
+# This ensures PDF_PARSER_COMPLETE.py in the project root is importable
+_project_root = Path(__file__).resolve().parents[3]  # Go up from pharma_api/app/routers/debtors.py
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
+from PDF_PARSER_COMPLETE import extract_debtors_strictest_names
 
 from ..db import get_conn
 from ..auth import get_current_user_id
@@ -19,7 +28,6 @@ from ..schemas import (
     CommunicationResult, CommunicationError, CommunicationLog, DebtorReport,
     DownloadCSVRequest, DownloadPDFRequest
 )
-from PDF_PARSER_COMPLETE import extract_debtors_strictest_names
 from ..utils.debtors import (
     is_medical_aid_control_account,
     create_email_template, create_sms_template, decrypt_api_key,
