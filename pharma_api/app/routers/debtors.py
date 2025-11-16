@@ -19,8 +19,9 @@ from ..schemas import (
     CommunicationResult, CommunicationError, CommunicationLog, DebtorReport,
     DownloadCSVRequest, DownloadPDFRequest
 )
+from PDF_PARSER_COMPLETE import extract_debtors_strictest_names
 from ..utils.debtors import (
-    extract_debtors_strictest_names, is_medical_aid_control_account,
+    is_medical_aid_control_account,
     create_email_template, create_sms_template, decrypt_api_key,
     debtor_to_dict
 )
@@ -72,7 +73,7 @@ def upload_debtor_report(
     
     try:
         # Parse PDF
-        df = extract_debtors_strictest_names(tmp_path)
+        df = extract_debtors_strictest_names(str(tmp_path))
         
         # Create report record
         with get_conn() as conn, conn.cursor() as cur:
