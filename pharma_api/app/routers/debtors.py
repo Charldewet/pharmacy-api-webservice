@@ -14,11 +14,30 @@ from pathlib import Path
 
 # Add project root to Python path to import PDF_PARSER_COMPLETE
 # This ensures PDF_PARSER_COMPLETE.py in the project root is importable
-_project_root = Path(__file__).resolve().parents[3]  # Go up from pharma_api/app/routers/debtors.py
-if str(_project_root) not in sys.path:
-    sys.path.insert(0, str(_project_root))
+# Path calculation: from pharma_api/app/routers/debtors.py go up 3 levels to project root
+_project_root = Path(__file__).resolve().parents[3]
+_project_root_str = str(_project_root)
+if _project_root_str not in sys.path:
+    sys.path.insert(0, _project_root_str)
 
-from PDF_PARSER_COMPLETE import extract_debtors_strictest_names
+# Try to import PDF_PARSER_COMPLETE, fallback to error if not found
+try:
+    from PDF_PARSER_COMPLETE import extract_debtors_strictest_names
+except ImportError:
+    # Check if file exists in project root
+    pdf_parser_file = _project_root / "PDF_PARSER_COMPLETE.py"
+    if pdf_parser_file.exists():
+        # File exists but import failed - might be a syntax error
+        raise ImportError(
+            f"PDF_PARSER_COMPLETE.py exists at {pdf_parser_file} but could not be imported. "
+            "Please check for syntax errors in the file."
+        )
+    else:
+        raise ImportError(
+            f"PDF_PARSER_COMPLETE module not found. "
+            f"Expected PDF_PARSER_COMPLETE.py at: {pdf_parser_file}. "
+            f"Project root: {_project_root_str}"
+        )
 
 from ..db import get_conn
 from ..auth import get_current_user_id
