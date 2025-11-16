@@ -90,3 +90,107 @@ class LowGPItem(BaseModel):
 
 class LowGPPage(BaseModel):
     items: List[LowGPItem]
+
+# ========== DEBTOR SCHEMAS ==========
+
+class DebtorReport(BaseModel):
+    id: int
+    pharmacy_id: int
+    filename: str
+    file_path: Optional[str] = None
+    uploaded_at: datetime
+    uploaded_by: Optional[int] = None
+    total_accounts: int
+    total_outstanding: float
+    status: str
+    error_message: Optional[str] = None
+
+class Debtor(BaseModel):
+    id: int
+    pharmacy_id: int
+    report_id: Optional[int] = None
+    acc_no: str
+    name: str
+    current: float
+    d30: float
+    d60: float
+    d90: float
+    d120: float
+    d150: float
+    d180: float
+    balance: float
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    is_medical_aid_control: bool
+    created_at: datetime
+    updated_at: datetime
+
+class DebtorPage(BaseModel):
+    total: int
+    page: int
+    per_page: int
+    pages: int
+    debtors: List[Debtor]
+
+class DebtorStatistics(BaseModel):
+    total_accounts: int
+    total_outstanding: float
+    current: float
+    d30: float
+    d60: float
+    d90: float
+    d120: float
+    d150: float
+    d180: float
+
+class UploadDebtorReportResponse(BaseModel):
+    report_id: int
+    total_accounts: int
+    total_outstanding: float
+    debtors: List[Debtor]
+
+class SendEmailRequest(BaseModel):
+    debtor_ids: List[int]
+    ageing_buckets: Optional[List[str]] = ["d60", "d90", "d120", "d150", "d180"]
+
+class SendSMSRequest(BaseModel):
+    debtor_ids: List[int]
+    ageing_buckets: Optional[List[str]] = ["d60", "d90", "d120", "d150", "d180"]
+
+class CommunicationResult(BaseModel):
+    debtor_id: int
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    status: str
+    external_id: Optional[str] = None
+
+class CommunicationError(BaseModel):
+    debtor_id: int
+    error: str
+
+class SendCommunicationResponse(BaseModel):
+    sent: List[CommunicationResult]
+    errors: List[CommunicationError]
+
+class DownloadCSVRequest(BaseModel):
+    debtor_ids: Optional[List[int]] = None
+    min_balance: Optional[float] = None
+
+class DownloadPDFRequest(BaseModel):
+    debtor_ids: Optional[List[int]] = None
+    ageing_buckets: Optional[List[str]] = None
+    col_names: Optional[dict] = None
+
+class CommunicationLog(BaseModel):
+    id: int
+    pharmacy_id: int
+    debtor_id: int
+    communication_type: str
+    recipient: str
+    subject: Optional[str] = None
+    message: str
+    status: str
+    external_id: Optional[str] = None
+    error_message: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    created_at: datetime

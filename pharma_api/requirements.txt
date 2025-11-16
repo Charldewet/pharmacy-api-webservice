@@ -10,4 +10,10 @@ PyJWT>=2.9.0
 cryptography>=45.0.0
 httpx[http2]>=0.27.2
 email-validator>=2.0.0
+pandas>=2.3.1
+pymupdf>=1.26.3
+pdfminer.six>=20231228
+sendgrid>=6.11.0
+requests>=2.32.4
+fpdf>=1.7.2
 
