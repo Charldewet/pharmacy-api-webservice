@@ -199,6 +199,22 @@ CREATE TABLE IF NOT EXISTS pharma.user_pharmacies (
   PRIMARY KEY (user_id, pharmacy_id)
 );
 
+-- ========== TARGETS ==========
+-- Daily turnover targets set by pharmacy managers
+CREATE TABLE IF NOT EXISTS pharma.pharmacy_targets (
+  id                bigserial PRIMARY KEY,
+  pharmacy_id       integer NOT NULL REFERENCES pharma.pharmacies(pharmacy_id) ON DELETE CASCADE,
+  date              date NOT NULL,
+  target_value      numeric(12, 2) NOT NULL CHECK (target_value >= 0),
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  created_by_user_id bigint REFERENCES pharma.users(user_id) ON DELETE SET NULL,
+  UNIQUE(pharmacy_id, date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pharmacy_targets_pharmacy_date ON pharma.pharmacy_targets(pharmacy_id, date);
+CREATE INDEX IF NOT EXISTS idx_pharmacy_targets_date ON pharma.pharmacy_targets(date);
+
 -- ========== PUSH & NOTIFICATIONS ==========
 -- Store one row per device per user
 CREATE TABLE IF NOT EXISTS pharma.devices (
@@ -265,17 +281,3 @@ CREATE TABLE IF NOT EXISTS pharma.broadcast_notifications (
   created_at        timestamptz NOT NULL DEFAULT now()
 );
 
--- ========== PHARMACY TARGETS ==========
--- Store daily target values for pharmacies
-CREATE TABLE IF NOT EXISTS pharma.pharmacy_targets (
-  id            bigserial PRIMARY KEY,
-  pharmacy_id   integer NOT NULL REFERENCES pharma.pharmacies(pharmacy_id) ON DELETE CASCADE,
-  target_date   date NOT NULL,
-  target_value  numeric(10,2) NOT NULL CHECK (target_value >= 0),
-  created_at    timestamptz NOT NULL DEFAULT now(),
-  updated_at    timestamptz NOT NULL DEFAULT now(),
-  UNIQUE(pharmacy_id, target_date)
-);
-
--- Index for efficient queries
-CREATE INDEX IF NOT EXISTS idx_pharmacy_targets_lookup ON pharma.pharmacy_targets(pharmacy_id, target_date);

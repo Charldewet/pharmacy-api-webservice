@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from typing import List, Optional, Dict
 from pydantic import BaseModel, EmailStr
+from datetime import date, datetime
 from ..db import get_conn
 from ..auth import get_current_user_id
 import hashlib
@@ -15,6 +16,25 @@ def require_charl(user_id: int = Depends(get_current_user_id)) -> int:
     if user_id != CHARL_USER_ID:
         raise HTTPException(status_code=403, detail="Admin access restricted to Charl only")
     return user_id
+
+def check_pharmacy_access(user_id: int, pharmacy_id: int, require_write: bool = False) -> None:
+    """Check if user has access to a pharmacy"""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT can_read, can_write
+            FROM pharma.user_pharmacies
+            WHERE user_id = %s AND pharmacy_id = %s
+        """, (user_id, pharmacy_id))
+        
+        access = cur.fetchone()
+        if not access:
+            raise HTTPException(status_code=403, detail=f"Access denied to pharmacy {pharmacy_id}")
+        
+        if not access['can_read']:
+            raise HTTPException(status_code=403, detail=f"Read access denied to pharmacy {pharmacy_id}")
+        
+        if require_write and not access['can_write']:
+            raise HTTPException(status_code=403, detail=f"Write access denied to pharmacy {pharmacy_id}")
 
 # Request/Response Models
 class UserListItem(BaseModel):
@@ -282,4 +302,200 @@ def list_pharmacies(user_id: int = Depends(require_charl)):
             })
         
         return pharmacies
+
+# ========== TARGETS ENDPOINTS ==========
+
+class TargetItem(BaseModel):
+    date: str
+    value: float
+
+class TargetsResponse(BaseModel):
+    pharmacy_id: int
+    month: str
+    targets: List[TargetItem]
+
+class SaveTargetsResponse(BaseModel):
+    success: bool
+    message: str
+    saved_count: int
+    pharmacy_id: int
+    month: str
+
+@router.get("/pharmacies/{pharmacy_id}/targets", response_model=TargetsResponse)
+def get_pharmacy_targets(
+    pharmacy_id: int,
+    month: str = Query(..., description="Month in YYYY-MM format"),
+    user_id: int = Depends(get_current_user_id)
+):
+    """Get all targets for a pharmacy within a specific month"""
+    # Check user has access to this pharmacy
+    check_pharmacy_access(user_id, pharmacy_id, require_write=False)
+    
+    # Validate month format
+    try:
+        year, month_num = month.split('-')
+        year = int(year)
+        month_num = int(month_num)
+        if month_num < 1 or month_num > 12:
+            raise ValueError("Month must be between 1 and 12")
+        month_start = date(year, month_num, 1)
+        # Calculate month end
+        if month_num == 12:
+            month_end = date(year + 1, 1, 1)
+        else:
+            month_end = date(year, month_num + 1, 1)
+    except (ValueError, IndexError):
+        raise HTTPException(status_code=400, detail="Month must be in YYYY-MM format")
+    
+    # Check pharmacy exists
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT pharmacy_id FROM pharma.pharmacies WHERE pharmacy_id = %s", (pharmacy_id,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail=f"Pharmacy ID {pharmacy_id} not found")
+        
+        # Get targets for the month
+        cur.execute("""
+            SELECT date, target_value
+            FROM pharma.pharmacy_targets
+            WHERE pharmacy_id = %s
+              AND date >= %s
+              AND date < %s
+            ORDER BY date
+        """, (pharmacy_id, month_start, month_end))
+        
+        targets = []
+        for row in cur.fetchall():
+            targets.append(TargetItem(
+                date=row['date'].isoformat(),
+                value=float(row['target_value'])
+            ))
+        
+        return TargetsResponse(
+            pharmacy_id=pharmacy_id,
+            month=month,
+            targets=targets
+        )
+
+@router.post("/pharmacies/{pharmacy_id}/targets", response_model=SaveTargetsResponse)
+def save_pharmacy_targets(
+    pharmacy_id: int,
+    month: str = Query(..., description="Month in YYYY-MM format"),
+    targets_data: Dict[str, float] = Body(...),
+    user_id: int = Depends(get_current_user_id)
+):
+    """Save or update targets for a pharmacy and month"""
+    # Check user has write access to this pharmacy
+    check_pharmacy_access(user_id, pharmacy_id, require_write=True)
+    
+    if not targets_data or len(targets_data) == 0:
+        raise HTTPException(status_code=400, detail="No targets provided")
+    
+    # Validate month format
+    try:
+        year, month_num = month.split('-')
+        year = int(year)
+        month_num = int(month_num)
+        if month_num < 1 or month_num > 12:
+            raise ValueError("Month must be between 1 and 12")
+        month_start = date(year, month_num, 1)
+        # Calculate month end
+        if month_num == 12:
+            month_end = date(year + 1, 1, 1)
+        else:
+            month_end = date(year, month_num + 1, 1)
+    except (ValueError, IndexError):
+        raise HTTPException(status_code=400, detail="Month must be in YYYY-MM format")
+    
+    # Check pharmacy exists
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT pharmacy_id FROM pharma.pharmacies WHERE pharmacy_id = %s", (pharmacy_id,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail=f"Pharmacy ID {pharmacy_id} not found")
+        
+        saved_count = 0
+        now = datetime.now()
+        
+        for date_str, target_value in targets_data.items():
+            # Validate date format
+            try:
+                target_date = date.fromisoformat(date_str)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid date format: {date_str}. Must be YYYY-MM-DD")
+            
+            # Validate date is within the specified month
+            if target_date < month_start or target_date >= month_end:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Date {date_str} is outside the specified month {month}"
+                )
+            
+            # Validate target value
+            if target_value < 0:
+                raise HTTPException(status_code=400, detail=f"Target value cannot be negative: {target_value}")
+            
+            if target_value > 10000000:  # Reasonable maximum
+                raise HTTPException(status_code=400, detail=f"Target value too large: {target_value}")
+            
+            # Upsert target
+            cur.execute("""
+                INSERT INTO pharma.pharmacy_targets (
+                    pharmacy_id, date, target_value, created_by_user_id, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (pharmacy_id, date) DO UPDATE SET
+                    target_value = EXCLUDED.target_value,
+                    updated_at = EXCLUDED.updated_at,
+                    created_by_user_id = EXCLUDED.created_by_user_id
+            """, (pharmacy_id, target_date, target_value, user_id, now, now))
+            
+            saved_count += 1
+        
+        conn.commit()
+        
+        return SaveTargetsResponse(
+            success=True,
+            message="Targets saved successfully",
+            saved_count=saved_count,
+            pharmacy_id=pharmacy_id,
+            month=month
+        )
+
+@router.delete("/pharmacies/{pharmacy_id}/targets/{target_date}")
+def delete_pharmacy_target(
+    pharmacy_id: int,
+    target_date: str,
+    user_id: int = Depends(get_current_user_id)
+):
+    """Delete a specific target for a pharmacy and date"""
+    # Check user has write access to this pharmacy
+    check_pharmacy_access(user_id, pharmacy_id, require_write=True)
+    
+    # Validate date format
+    try:
+        date_obj = date.fromisoformat(target_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid date format: {target_date}. Must be YYYY-MM-DD")
+    
+    with get_conn() as conn, conn.cursor() as cur:
+        # Check if target exists
+        cur.execute("""
+            SELECT id FROM pharma.pharmacy_targets
+            WHERE pharmacy_id = %s AND date = %s
+        """, (pharmacy_id, date_obj))
+        
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail=f"Target not found for pharmacy {pharmacy_id} on {target_date}")
+        
+        # Delete target
+        cur.execute("""
+            DELETE FROM pharma.pharmacy_targets
+            WHERE pharmacy_id = %s AND date = %s
+        """, (pharmacy_id, date_obj))
+        
+        conn.commit()
+        
+        return {
+            "success": True,
+            "message": "Target deleted successfully"
+        }
 
