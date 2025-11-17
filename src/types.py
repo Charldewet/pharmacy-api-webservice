@@ -5,6 +5,7 @@ class ReportType(str, Enum):
     TRADING_ACCOUNT = "trading_account"    # STK261: opening/purchases/COS/closing
     TURNOVER_SUMMARY = "turnover_summary"  # INV249: turnover + counts/averages
     DISPENSARY_SCRIPTS = "dispensary_scripts"  # PHM080: Script Statistics
+    DEBTOR_REPORT = "debtor_report"        # DEB013: Debtors Age Analysis
 
 class PharmacyId(int, Enum):
     REITZ = 1

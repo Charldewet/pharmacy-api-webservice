@@ -33,10 +33,10 @@ if not DSN:
     print("ERROR: DATABASE_URL environment variable is required")
     sys.exit(1)
 if not IMAP_USER:
-    print("ERROR: REITZ_GMAIL_USERNAME environment variable is required")
+    print("ERROR: GMAIL_USER environment variable is required")
     sys.exit(1)
 if not IMAP_PASS:
-    print("ERROR: REITZ_GMAIL_APP_PASSWORD environment variable is required")
+    print("ERROR: GMAIL_PASSWORD environment variable is required")
     sys.exit(1)
 
 print(f"Starting live import with user: {IMAP_USER}, label: {GMAIL_LABEL}, lookback: {LOOKBACK_HOURS}h")
@@ -52,12 +52,14 @@ from src.parsers.turnover import parse_turnover_summary
 from src.parsers.trading_account import parse_trading_account
 from src.parsers.scripts import parse_scripts
 from src.parsers.gp_report import parse_gp_report
+from src.parsers.debtor_report import parse_debtor_report
 
 REPORT_MAP = {
     "turnover_summary": parse_turnover_summary,
     "trading_account": parse_trading_account,
     "dispensary_scripts": parse_scripts,
     "gross_profit": parse_gp_report,
+    "debtor_report": parse_debtor_report,
 }
 
 # =========================
@@ -172,6 +174,7 @@ def classify_and_parse_bytes(filename: str, data: bytes) -> Dict[str, Any]:
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         tmp.write(data); tmp.flush()
         path = tmp.name
+    rec = None
     try:
         c = classify_file(Path(path))
         if not c.report_type:
@@ -182,10 +185,20 @@ def classify_and_parse_bytes(filename: str, data: bytes) -> Dict[str, Any]:
         rec = parser(Path(path))
         rec["status"] = "parsed"
         rec["report_type"] = c.report_type
+        # Set pharmacy_id from classification if available
+        if c.pharmacy_id and not rec.get("pharmacy_id"):
+            rec["pharmacy_id"] = c.pharmacy_id
         return rec
     finally:
-        try: os.unlink(path)
-        except Exception: pass
+        # Keep temp file path for debtor reports (needed for file_path storage)
+        # For other reports, delete immediately
+        if rec and rec.get("report_type") != "debtor_report":
+            try: os.unlink(path)
+            except Exception: pass
+        elif not rec:
+            # If parsing failed, clean up temp file
+            try: os.unlink(path)
+            except Exception: pass
 
 def biz_date(rec: Dict[str, Any]) -> Optional[str]:
     return rec.get("business_date") or rec.get("date_from") or rec.get("date_to")
@@ -197,6 +210,8 @@ def latest_per_key(atts: List[AttachmentRec]) -> Dict[Key, Tuple[AttachmentRec, 
     Parse all attachments, keep only the latest (by received_at) per (pharmacy_id, business_date, report_type).
     If timestamps are equal, prefer the one with higher values (never discard newer data).
     Uses pre-classified pharmacy info from email subjects when available.
+    
+    For debtor reports, business_date is set to the upload date (YYYY-MM-DD from received_at).
     """
     chosen: Dict[Key, Tuple[AttachmentRec, Dict[str, Any]]] = {}
     for att in atts:
@@ -206,8 +221,13 @@ def latest_per_key(atts: List[AttachmentRec]) -> Dict[Key, Tuple[AttachmentRec, 
         
         # Use pre-classified pharmacy info from email subject if available
         pid = att.pharmacy_id or rec.get("pharmacy_id")
-        bdt = biz_date(rec)
         rtype = rec.get("report_type")
+        
+        # For debtor reports, use upload date as business_date
+        if rtype == "debtor_report":
+            bdt = att.received_at.date().isoformat() if att.received_at else datetime.now().date().isoformat()
+        else:
+            bdt = biz_date(rec)
         
         if not (pid and bdt and rtype):
             continue
@@ -216,6 +236,10 @@ def latest_per_key(atts: List[AttachmentRec]) -> Dict[Key, Tuple[AttachmentRec, 
         if att.pharmacy_id and att.pharmacy_id != rec.get("pharmacy_id"):
             print(f"[live] Overriding PDF pharmacy_id {rec.get('pharmacy_id')} with email subject pharmacy_id {att.pharmacy_id}")
             rec["pharmacy_id"] = att.pharmacy_id
+        
+        # Set pharmacy_id if not already set
+        if not rec.get("pharmacy_id"):
+            rec["pharmacy_id"] = pid
             
         key: Key = (int(pid), str(bdt), str(rtype))
         cur = chosen.get(key)
@@ -234,6 +258,13 @@ def latest_per_key(atts: List[AttachmentRec]) -> Dict[Key, Tuple[AttachmentRec, 
                 if new_lines > cur_lines:
                     chosen[key] = (att, rec)
                     print(f"[live] Same timestamp for {rtype} on {bdt}, preferring report with {new_lines} lines over {cur_lines}")
+            # For debtor reports, prefer the one with more accounts
+            elif rtype == "debtor_report":
+                cur_accounts = cur[1].get("total_accounts", 0) or 0
+                new_accounts = rec.get("total_accounts", 0) or 0
+                if new_accounts > cur_accounts:
+                    chosen[key] = (att, rec)
+                    print(f"[live] Same timestamp for {rtype} on {bdt}, preferring report with {new_accounts} accounts over {cur_accounts}")
             # For other reports, prefer the one with higher values
             else:
                 # Compare key metrics and prefer higher values
@@ -306,6 +337,38 @@ SET inv249_turnover = pharma.report_coverage.inv249_turnover OR EXCLUDED.inv249_
     phm080_scripts  = pharma.report_coverage.phm080_scripts  OR EXCLUDED.phm080_scripts,
     stk260_gp       = pharma.report_coverage.stk260_gp       OR EXCLUDED.stk260_gp,
     last_updated    = now();
+"""
+
+# ---- Debtor report SQL
+INSERT_DEBTOR_REPORT = """
+INSERT INTO pharma.debtor_reports (
+    pharmacy_id, filename, file_path, uploaded_at, uploaded_by,
+    total_accounts, total_outstanding, status
+)
+VALUES (
+    %(pharmacy_id)s, %(filename)s, %(file_path)s, %(uploaded_at)s, %(uploaded_by)s,
+    %(total_accounts)s, %(total_outstanding)s, 'completed'
+)
+RETURNING id;
+"""
+
+# Delete all existing debtors for a pharmacy before importing new report
+DELETE_PHARMACY_DEBTORS = """
+DELETE FROM pharma.debtors
+WHERE pharmacy_id = %(pharmacy_id)s;
+"""
+
+INSERT_DEBTOR = """
+INSERT INTO pharma.debtors (
+    pharmacy_id, report_id, acc_no, name,
+    current, d30, d60, d90, d120, d150, d180, balance,
+    email, phone, is_medical_aid_control
+)
+VALUES (
+    %(pharmacy_id)s, %(report_id)s, %(acc_no)s, %(name)s,
+    %(current)s, %(d30)s, %(d60)s, %(d90)s, %(d120)s, %(d150)s, %(d180)s, %(balance)s,
+    %(email)s, %(phone)s, %(is_medical_aid_control)s
+);
 """
 
 # ---- GP bulk staging (TEMP + replace-the-day)
@@ -512,6 +575,71 @@ def insert_receipt_and_coverage(cur, att: AttachmentRec, rec: Dict[str, Any]):
     cur.execute(INSERT_RECEIPT, params)
     cur.execute(UPSERT_COVERAGE, params)
 
+def load_debtor_report(cur, att: AttachmentRec, rec: Dict[str, Any], temp_file_path: Optional[str] = None):
+    """
+    Load a debtor report and its debtors into the database.
+    
+    IMPORTANT: This function completely replaces all existing debtors for the pharmacy
+    with the new data from the report. All previous debtors are deleted first.
+    
+    Args:
+        cur: Database cursor
+        att: Attachment record
+        rec: Parsed report record
+        temp_file_path: Optional path to temp file (for file_path storage)
+    
+    Returns:
+        Number of debtors inserted
+    """
+    from PDF_PARSER_COMPLETE import is_medical_aid_control_account
+    
+    pharmacy_id = rec.get("pharmacy_id")
+    if not pharmacy_id:
+        raise ValueError("pharmacy_id is required for debtor reports")
+    
+    # Step 1: Delete ALL existing debtors for this pharmacy (complete replacement)
+    cur.execute(DELETE_PHARMACY_DEBTORS, {"pharmacy_id": pharmacy_id})
+    deleted_count = cur.rowcount
+    
+    # Step 2: Insert new debtor report record
+    report_params = {
+        "pharmacy_id": pharmacy_id,
+        "filename": att.filename,
+        "file_path": temp_file_path,  # Store temp path if available
+        "uploaded_at": att.received_at,
+        "uploaded_by": None,  # System import, no user
+        "total_accounts": rec.get("total_accounts", 0),
+        "total_outstanding": rec.get("total_outstanding", 0.0),
+    }
+    
+    cur.execute(INSERT_DEBTOR_REPORT, report_params)
+    result = cur.fetchone()
+    report_id = result["id"] if isinstance(result, dict) else result[0]
+    
+    # Step 3: Insert new debtors from the report
+    debtors = rec.get("debtors", [])
+    for debtor in debtors:
+        debtor_params = {
+            "pharmacy_id": pharmacy_id,
+            "report_id": report_id,
+            "acc_no": str(debtor.get("acc_no", "")),
+            "name": str(debtor.get("name", "")),
+            "current": float(debtor.get("current", 0.0)),
+            "d30": float(debtor.get("d30", 0.0)),
+            "d60": float(debtor.get("d60", 0.0)),
+            "d90": float(debtor.get("d90", 0.0)),
+            "d120": float(debtor.get("d120", 0.0)),
+            "d150": float(debtor.get("d150", 0.0)),
+            "d180": float(debtor.get("d180", 0.0)),
+            "balance": float(debtor.get("balance", 0.0)),
+            "email": debtor.get("email") or None,
+            "phone": debtor.get("phone") or None,
+            "is_medical_aid_control": is_medical_aid_control_account(debtor.get("name", "")),
+        }
+        cur.execute(INSERT_DEBTOR, debtor_params)
+    
+    return len(debtors)
+
 def rows_from_rec(rec: Dict[str, Any]) -> Iterable[Tuple]:
     pid = rec.get("pharmacy_id")
     bdt = biz_date(rec)
@@ -677,9 +805,49 @@ def run_live_import(verbose: bool = True):
         if verbose:
             print(f"[live] gp receipts: {gp_files} | gp rows loaded: {gp_rows}")
 
-        conn.commit()
+        # 3) Debtor reports (process separately, no business_date dependency)
+        debtor_count = 0
+        temp_files = []  # Track temp files for cleanup
+        for (_key, (att, rec)) in latest.items():
+            if rec["report_type"] == "debtor_report":
+                # Create temp file for processing (needed for file_path storage)
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                    tmp.write(att.data)
+                    tmp.flush()
+                    temp_path = tmp.name
+                    temp_files.append(temp_path)
+                
+                try:
+                    debtor_rows = load_debtor_report(cur, att, rec, temp_path)
+                    debtor_count += 1
+                    if verbose:
+                        print(f"[live] debtor report processed: {att.filename} - replaced all debtors, inserted {debtor_rows} new debtors")
+                except Exception as e:
+                    print(f"[live] ERROR processing debtor report {att.filename}: {str(e)}")
+                    # Update report status to failed (if report was created)
+                    try:
+                        cur.execute("""
+                            UPDATE pharma.debtor_reports 
+                            SET status = 'failed', error_message = %s
+                            WHERE filename = %s AND pharmacy_id = %s
+                            ORDER BY uploaded_at DESC LIMIT 1
+                        """, (str(e), att.filename, rec.get("pharmacy_id")))
+                    except Exception:
+                        pass  # Report might not exist yet
 
-    # 3) Refresh MTD/YTD aggregates for touched months/years (separate short txn)
+        conn.commit()
+        
+        # Clean up temp files after commit
+        for temp_path in temp_files:
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
+        
+        if verbose and debtor_count > 0:
+            print(f"[live] debtor reports processed: {debtor_count}")
+
+    # 4) Refresh MTD/YTD aggregates for touched months/years (separate short txn)
     if touched_days:
         months = {(pid, _month_start_str(bd)) for (pid, bd) in touched_days}
         years  = {(pid, _year_start_str(bd))  for (pid, bd) in touched_days}

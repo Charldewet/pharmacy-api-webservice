@@ -104,6 +104,10 @@ def upload_debtor_report(
         
         # Create report record
         with get_conn() as conn, conn.cursor() as cur:
+            # IMPORTANT: Delete ALL existing debtors for this pharmacy first (complete replacement)
+            cur.execute("DELETE FROM pharma.debtors WHERE pharmacy_id = %s", (pharmacy_id,))
+            deleted_count = cur.rowcount
+            
             cur.execute("""
                 INSERT INTO pharma.debtor_reports 
                 (pharmacy_id, filename, file_path, uploaded_by, status)
@@ -120,81 +124,31 @@ def upload_debtor_report(
                 # Check if medical aid account
                 is_medical_aid = is_medical_aid_control_account(row.get('name', ''))
                 
-                # Check if debtor already exists
+                # Insert new debtor (no need to check for existing since we deleted all)
                 cur.execute("""
-                    SELECT id FROM pharma.debtors
-                    WHERE pharmacy_id = %s AND acc_no = %s
-                """, (pharmacy_id, str(row['acc_no'])))
-                existing = cur.fetchone()
-                
-                if existing:
-                    # Update existing debtor
-                    cur.execute("""
-                        UPDATE pharma.debtors SET
-                            name = %s,
-                            current = %s,
-                            d30 = %s,
-                            d60 = %s,
-                            d90 = %s,
-                            d120 = %s,
-                            d150 = %s,
-                            d180 = %s,
-                            balance = %s,
-                            email = %s,
-                            phone = %s,
-                            is_medical_aid_control = %s,
-                            report_id = %s,
-                            updated_at = NOW()
-                        WHERE id = %s
-                        RETURNING id, created_at, updated_at
-                    """, (
-                        row['name'],
-                        float(row.get('current', 0) or 0),
-                        float(row.get('d30', 0) or 0),
-                        float(row.get('d60', 0) or 0),
-                        float(row.get('d90', 0) or 0),
-                        float(row.get('d120', 0) or 0),
-                        float(row.get('d150', 0) or 0),
-                        float(row.get('d180', 0) or 0),
-                        float(row.get('balance', 0) or 0),
-                        row.get('email', '') or '',
-                        row.get('phone', '') or '',
-                        is_medical_aid,
-                        report_id,
-                        existing['id']
-                    ))
-                    updated = cur.fetchone()
-                    debtor_id = existing['id']
-                    created_at = updated['created_at']
-                    updated_at = updated['updated_at']
-                else:
-                    # Create new debtor
-                    cur.execute("""
-                        INSERT INTO pharma.debtors
-                        (pharmacy_id, report_id, acc_no, name, current, d30, d60, d90, d120, d150, d180, balance, email, phone, is_medical_aid_control)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        RETURNING id, created_at, updated_at
-                    """, (
-                        pharmacy_id,
-                        report_id,
-                        str(row['acc_no']),
-                        row['name'],
-                        float(row.get('current', 0) or 0),
-                        float(row.get('d30', 0) or 0),
-                        float(row.get('d60', 0) or 0),
-                        float(row.get('d90', 0) or 0),
-                        float(row.get('d120', 0) or 0),
-                        float(row.get('d150', 0) or 0),
-                        float(row.get('d180', 0) or 0),
-                        float(row.get('balance', 0) or 0),
-                        row.get('email', '') or '',
-                        row.get('phone', '') or '',
-                        is_medical_aid
-                    ))
-                    new_debtor = cur.fetchone()
-                    debtor_id = new_debtor['id']
-                    created_at = new_debtor['created_at']
-                    updated_at = new_debtor['updated_at']
+                    INSERT INTO pharma.debtors
+                    (pharmacy_id, report_id, acc_no, name, current, d30, d60, d90, d120, d150, d180, balance, email, phone, is_medical_aid_control)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id, created_at, updated_at
+                """, (
+                    pharmacy_id,
+                    report_id,
+                    str(row['acc_no']),
+                    str(row['name']),
+                    float(row.get('current', 0) or 0),
+                    float(row.get('d30', 0) or 0),
+                    float(row.get('d60', 0) or 0),
+                    float(row.get('d90', 0) or 0),
+                    float(row.get('d120', 0) or 0),
+                    float(row.get('d150', 0) or 0),
+                    float(row.get('d180', 0) or 0),
+                    float(row.get('balance', 0) or 0),
+                    row.get('email') or None,
+                    row.get('phone') or None,
+                    is_medical_aid
+                ))
+                new_debtor = cur.fetchone()
+                debtor_id = new_debtor['id']
                 
                 if not is_medical_aid:
                     total_outstanding += float(row.get('balance', 0) or 0)
@@ -248,6 +202,39 @@ def upload_debtor_report(
                 os.unlink(tmp_path)
         except:
             pass
+
+
+@router.get("/reports", response_model=List[DebtorReport])
+def get_debtor_reports(
+    pharmacy_id: int,
+    user_id: int = Depends(get_current_user_id)
+):
+    """Get list of all uploaded debtor reports for a pharmacy"""
+    check_pharmacy_access(user_id, pharmacy_id)
+    
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT * FROM pharma.debtor_reports
+            WHERE pharmacy_id = %s
+            ORDER BY uploaded_at DESC
+        """, (pharmacy_id,))
+        
+        reports = cur.fetchall()
+        return [
+            DebtorReport(
+                id=report['id'],
+                pharmacy_id=report['pharmacy_id'],
+                filename=report['filename'],
+                file_path=report.get('file_path'),
+                uploaded_at=report['uploaded_at'],
+                uploaded_by=report.get('uploaded_by'),
+                total_accounts=report['total_accounts'],
+                total_outstanding=float(report['total_outstanding']),
+                status=report['status'],
+                error_message=report.get('error_message')
+            )
+            for report in reports
+        ]
 
 
 @router.get("", response_model=DebtorPage)

@@ -80,6 +80,11 @@ PATTERNS: List[Tuple[ReportType, List[str]]] = [
         r"\bGROSS PROFIT REPORT\b",
         r"\bSALES-VAL\b.*\bSALES-COST\b.*\bGROSS-PROF\b",
     ]),
+    # Debtor Report (DEB013)
+    (ReportType.DEBTOR_REPORT, [
+        r"\bDEBTORS\s+AGE\s+ANALYSIS\b",
+        r"\bACC-NO\b.*\bN\s+A\s+M\s+E\b",
+    ]),
 ]
 
 def classify_text(text_head: str) -> Optional[ReportType]:
@@ -89,6 +94,9 @@ def classify_text(text_head: str) -> Optional[ReportType]:
     # Conservative fallbacks
     if "SCRIPT STATISTICS" in text_head and "TOTAL REVENUE" in text_head:
         return ReportType.DISPENSARY_SCRIPTS
+    # Debtor report fallback - check for key indicators
+    if "DEBTORS AGE ANALYSIS" in text_head or ("ACC-NO" in text_head and "BALANCE" in text_head):
+        return ReportType.DEBTOR_REPORT
 
     return None
 
@@ -102,6 +110,9 @@ PHARMACY_PATTERNS: Tuple[Tuple[PharmacyId, str, str], ...] = (
     (PharmacyId.REITZ,     "REITZ APTEEK",            r"\bREITZ\s+APTEEK\b"),
     (PharmacyId.WINTERTON, "TLC PHARMACY WINTERTON",  r"\bTLC\s+PHARMACY\s+WINTERTO(?:N)?\b"),
     (PharmacyId.ROOS,      "THE LOCAL CHOICE PHARMACY ROOS", r"\bTHE\s+LOCAL\s+CHOICE\s+PHARMACY\b"),
+    (PharmacyId.VILLIERS,  "TLC VILLIERS PHARMACY",    r"\bTLC\s+VILLIERS\s+PHARMACY\b"),
+    (PharmacyId.TUGELA,    "TLC TUGELA PHARMACY",     r"\bTLC\s+TUGELA\s+PHARMACY\b"),
+    (PharmacyId.UMDONI,    "TLC UMDONI",              r"\bTLC\s+UMDONI\b"),
 )
 
 def detect_pharmacy(text_head: str) -> Optional[Tuple[PharmacyId, str]]:
