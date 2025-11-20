@@ -137,20 +137,32 @@ DATE_PATTERNS = [
     r"\b(\d{4}/\d{2}/\d{2})\s*-\s*(\d{4}/\d{2}/\d{2})\s*\(INCLUSIVE\)",
 ]
 
-def _iso(dmyslash: str) -> str:
+def _iso(dmyslash: str) -> Optional[str]:
     # "YYYY/MM/DD" -> "YYYY-MM-DD"
-    return datetime.strptime(dmyslash, "%Y/%m/%d").date().isoformat()
+    # Returns None if date is invalid (e.g., "9999/99/99")
+    try:
+        return datetime.strptime(dmyslash, "%Y/%m/%d").date().isoformat()
+    except ValueError:
+        return None
 
 def extract_date_range(text_head: str) -> Tuple[Optional[str], Optional[str]]:
     # 1) Try specific patterns
     for pat in DATE_PATTERNS:
         m = re.search(pat, text_head, re.I)
         if m:
-            return _iso(m.group(1)), _iso(m.group(2))
+            date_from = _iso(m.group(1))
+            date_to = _iso(m.group(2))
+            # Only return if both dates are valid
+            if date_from and date_to:
+                return date_from, date_to
     # 2) Fallback: take first two YYYY/MM/DD tokens in the header blob
     dates = re.findall(r"\b(\d{4}/\d{2}/\d{2})\b", text_head)
     if len(dates) >= 2:
-        return _iso(dates[0]), _iso(dates[1])
+        date_from = _iso(dates[0])
+        date_to = _iso(dates[1])
+        # Only return if both dates are valid
+        if date_from and date_to:
+            return date_from, date_to
     return None, None
 
 
