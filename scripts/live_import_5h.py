@@ -618,27 +618,52 @@ def load_debtor_report(cur, att: AttachmentRec, rec: Dict[str, Any], temp_file_p
     
     # Step 3: Insert new debtors from the report
     debtors = rec.get("debtors", [])
-    for debtor in debtors:
-        debtor_params = {
-            "pharmacy_id": pharmacy_id,
-            "report_id": report_id,
-            "acc_no": str(debtor.get("acc_no", "")),
-            "name": str(debtor.get("name", "")),
-            "current": float(debtor.get("current", 0.0)),
-            "d30": float(debtor.get("d30", 0.0)),
-            "d60": float(debtor.get("d60", 0.0)),
-            "d90": float(debtor.get("d90", 0.0)),
-            "d120": float(debtor.get("d120", 0.0)),
-            "d150": float(debtor.get("d150", 0.0)),
-            "d180": float(debtor.get("d180", 0.0)),
-            "balance": float(debtor.get("balance", 0.0)),
-            "email": debtor.get("email") or None,
-            "phone": debtor.get("phone") or None,
-            "is_medical_aid_control": is_medical_aid_control_account(debtor.get("name", "")),
-        }
-        cur.execute(INSERT_DEBTOR, debtor_params)
+    if not debtors:
+        # Log warning if no debtors found but total_accounts > 0
+        if rec.get("total_accounts", 0) > 0:
+            print(f"[live] WARNING: Report has total_accounts={rec.get('total_accounts')} but debtors list is empty!")
+        return 0
     
-    return len(debtors)
+    inserted_count = 0
+    errors = []
+    for i, debtor in enumerate(debtors):
+        try:
+            debtor_params = {
+                "pharmacy_id": pharmacy_id,
+                "report_id": report_id,
+                "acc_no": str(debtor.get("acc_no", "")),
+                "name": str(debtor.get("name", "")),
+                "current": float(debtor.get("current", 0.0)),
+                "d30": float(debtor.get("d30", 0.0)),
+                "d60": float(debtor.get("d60", 0.0)),
+                "d90": float(debtor.get("d90", 0.0)),
+                "d120": float(debtor.get("d120", 0.0)),
+                "d150": float(debtor.get("d150", 0.0)),
+                "d180": float(debtor.get("d180", 0.0)),
+                "balance": float(debtor.get("balance", 0.0)),
+                "email": debtor.get("email") or None,
+                "phone": debtor.get("phone") or None,
+                "is_medical_aid_control": is_medical_aid_control_account(debtor.get("name", "")),
+            }
+            cur.execute(INSERT_DEBTOR, debtor_params)
+            inserted_count += 1
+        except Exception as e:
+            errors.append(f"Debtor {i+1} (acc_no={debtor.get('acc_no', 'unknown')}): {str(e)}")
+            # Continue with next debtor instead of failing completely
+            if len(errors) <= 5:  # Only log first 5 errors to avoid spam
+                print(f"[live] ERROR inserting debtor {i+1}: {str(e)}")
+    
+    if errors:
+        error_msg = f"Failed to insert {len(errors)}/{len(debtors)} debtors. First errors: {'; '.join(errors[:3])}"
+        print(f"[live] {error_msg}")
+        # Update report with error message
+        cur.execute("""
+            UPDATE pharma.debtor_reports 
+            SET error_message = %s, status = CASE WHEN %s > 0 THEN 'completed' ELSE 'failed' END
+            WHERE id = %s
+        """, (error_msg, inserted_count, report_id))
+    
+    return inserted_count
 
 def rows_from_rec(rec: Dict[str, Any]) -> Iterable[Tuple]:
     pid = rec.get("pharmacy_id")

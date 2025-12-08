@@ -33,6 +33,25 @@ class DailySales(BaseModel):
     frontshop_pct: Optional[float] = None
     frontshop_turnover: Optional[float] = None
 
+class GPBreakdown(BaseModel):
+    """GP breakdown for a single segment (dispensary or frontshop)"""
+    product_count: int
+    sales_value: float
+    cost_of_sales: float
+    gross_profit: float
+    gp_percentage: float
+    gp_percentage_of_total: Optional[float] = None
+
+class FrontshopDispensaryGP(BaseModel):
+    """Frontshop vs Dispensary GP breakdown using line-level data"""
+    business_date: date
+    pharmacy_id: int
+    dispensary: GPBreakdown
+    frontshop: GPBreakdown
+    total: GPBreakdown
+    daily_summary_gp: Optional[float] = None
+    difference: Optional[float] = None
+
 class StockItem(BaseModel):
     department_code: Optional[str] = None
     product_code: str
