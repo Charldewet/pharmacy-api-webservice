@@ -192,255 +192,255 @@ async def confirm_bank_import(
     """
     try:
         with get_conn() as conn, conn.cursor() as cur:
-        # Validate pharmacy exists
-        cur.execute(
-            "SELECT pharmacy_id FROM pharma.pharmacies WHERE pharmacy_id = %s AND is_active = true",
-            (pharmacy_id,)
-        )
-        if not cur.fetchone():
-            raise HTTPException(status_code=404, detail="Pharmacy not found or inactive")
-        
-        # Validate bank account exists and belongs to pharmacy
-        cur.execute("""
-            SELECT id, bank_name FROM pharma.bank_accounts
-            WHERE id = %s AND pharmacy_id = %s AND is_active = true
-        """, (bank_account_id, pharmacy_id))
-        
-        bank_account = cur.fetchone()
-        if not bank_account:
-            raise HTTPException(
-                status_code=404,
-                detail="Bank account not found, inactive, or does not belong to this pharmacy"
+            # Validate pharmacy exists
+            cur.execute(
+                "SELECT pharmacy_id FROM pharma.pharmacies WHERE pharmacy_id = %s AND is_active = true",
+                (pharmacy_id,)
             )
-        
-        bank_name = bank_account['bank_name']
-        
-        # Read file content
-        try:
-            file_content = await file.read()
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Error reading file: {str(e)}")
-        
-        if not file_content:
-            raise HTTPException(status_code=400, detail="File is empty")
-        
-        # Parse CSV
-        try:
-            valid_results, error_results = parse_csv_file(file_content, bank_name)
-        except ValueError as e:
-            raise HTTPException(status_code=422, detail=str(e))
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error parsing CSV: {str(e)}")
-        
-        if not valid_results:
-            raise HTTPException(
-                status_code=400,
-                detail="No valid transactions found in file. Please check the file format."
-            )
-        
-        # Compute period dates
-        dates = [r.date for r in valid_results if r.date]
-        period_start = min(dates) if dates else None
-        period_end = max(dates) if dates else None
-        
-        # Create bank_import_batch
-        cur.execute("""
-            INSERT INTO pharma.bank_import_batches
-            (bank_account_id, pharmacy_id, period_start, period_end, file_name, status, notes)
-            VALUES (%s, %s, %s, %s, %s, 'IMPORTED', %s)
-            RETURNING id
-        """, (
-            bank_account_id,
-            pharmacy_id,
-            period_start,
-            period_end,
-            file_name,
-            notes
-        ))
-        
-        batch_id = cur.fetchone()['id']
-        
-        # Insert valid transactions with batch duplicate detection
-        transactions_inserted = 0
-        transactions_skipped = 0
-        
-        if skip_duplicates and valid_results:
-            # Batch duplicate detection - much faster than individual queries
-            # Collect external_ids and heuristic keys
-            external_ids = [r.external_id for r in valid_results if r.external_id]
-            heuristic_keys = [
-                (r.date, r.amount, r.description) 
-                for r in valid_results 
-                if not r.external_id
-            ]
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Pharmacy not found or inactive")
             
-            # Check duplicates by external_id (bulk query)
-            existing_external_ids = set()
-            if external_ids:
-                placeholders = ','.join(['%s'] * len(external_ids))
-                cur.execute(f"""
-                    SELECT DISTINCT external_id FROM pharma.bank_transactions
-                    WHERE bank_account_id = %s AND external_id IN ({placeholders})
-                """, [bank_account_id] + external_ids)
-                existing_external_ids = {row['external_id'] for row in cur.fetchall()}
+            # Validate bank account exists and belongs to pharmacy
+            cur.execute("""
+                SELECT id, bank_name FROM pharma.bank_accounts
+                WHERE id = %s AND pharmacy_id = %s AND is_active = true
+            """, (bank_account_id, pharmacy_id))
             
-            # Check duplicates by heuristic (bulk query)
-            # Use a temporary table approach for better performance with large datasets
-            existing_heuristic = set()
-            if heuristic_keys:
-                # For large datasets, use a temp table approach
-                if len(heuristic_keys) > 100:
-                    # Create temp table
-                    cur.execute("""
-                        CREATE TEMP TABLE temp_duplicate_check (
-                            check_date DATE,
-                            check_amount DECIMAL,
-                            check_description TEXT
-                        ) ON COMMIT DROP
-                    """)
-                    
-                    # Insert keys to check
-                    cur.executemany("""
-                        INSERT INTO temp_duplicate_check (check_date, check_amount, check_description)
-                        VALUES (%s, %s, %s)
-                    """, heuristic_keys)
-                    
-                    # Join with existing transactions
-                    cur.execute("""
-                        SELECT DISTINCT t.date, t.amount, t.description
-                        FROM pharma.bank_transactions t
-                        INNER JOIN temp_duplicate_check tmp
-                        ON t.date = tmp.check_date
-                        AND t.amount = tmp.check_amount
-                        AND t.description = tmp.check_description
-                        WHERE t.bank_account_id = %s
-                    """, (bank_account_id,))
-                    
-                    existing_heuristic = {
-                        (row['date'], row['amount'], row['description']) 
-                        for row in cur.fetchall()
-                    }
-                else:
-                    # For smaller datasets, use OR conditions (simpler)
-                    conditions = []
-                    params = [bank_account_id]
-                    for date, amount, desc in heuristic_keys:
-                        conditions.append("(date = %s AND amount = %s AND description = %s)")
-                        params.extend([date, amount, desc])
-                    
-                    if conditions:
-                        query = f"""
-                            SELECT DISTINCT date, amount, description 
-                            FROM pharma.bank_transactions
-                            WHERE bank_account_id = %s AND ({' OR '.join(conditions)})
-                        """
-                        cur.execute(query, params)
+            bank_account = cur.fetchone()
+            if not bank_account:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Bank account not found, inactive, or does not belong to this pharmacy"
+                )
+            
+            bank_name = bank_account['bank_name']
+            
+            # Read file content
+            try:
+                file_content = await file.read()
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Error reading file: {str(e)}")
+            
+            if not file_content:
+                raise HTTPException(status_code=400, detail="File is empty")
+            
+            # Parse CSV
+            try:
+                valid_results, error_results = parse_csv_file(file_content, bank_name)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error parsing CSV: {str(e)}")
+            
+            if not valid_results:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No valid transactions found in file. Please check the file format."
+                )
+            
+            # Compute period dates
+            dates = [r.date for r in valid_results if r.date]
+            period_start = min(dates) if dates else None
+            period_end = max(dates) if dates else None
+            
+            # Create bank_import_batch
+            cur.execute("""
+                INSERT INTO pharma.bank_import_batches
+                (bank_account_id, pharmacy_id, period_start, period_end, file_name, status, notes)
+                VALUES (%s, %s, %s, %s, %s, 'IMPORTED', %s)
+                RETURNING id
+            """, (
+                bank_account_id,
+                pharmacy_id,
+                period_start,
+                period_end,
+                file_name,
+                notes
+            ))
+            
+            batch_id = cur.fetchone()['id']
+            
+            # Insert valid transactions with batch duplicate detection
+            transactions_inserted = 0
+            transactions_skipped = 0
+            
+            if skip_duplicates and valid_results:
+                # Batch duplicate detection - much faster than individual queries
+                # Collect external_ids and heuristic keys
+                external_ids = [r.external_id for r in valid_results if r.external_id]
+                heuristic_keys = [
+                    (r.date, float(r.amount) if r.amount is not None else None, r.description) 
+                    for r in valid_results 
+                    if not r.external_id
+                ]
+                
+                # Check duplicates by external_id (bulk query)
+                existing_external_ids = set()
+                if external_ids:
+                    placeholders = ','.join(['%s'] * len(external_ids))
+                    cur.execute(f"""
+                        SELECT DISTINCT external_id FROM pharma.bank_transactions
+                        WHERE bank_account_id = %s AND external_id IN ({placeholders})
+                    """, [bank_account_id] + external_ids)
+                    existing_external_ids = {row['external_id'] for row in cur.fetchall()}
+                
+                # Check duplicates by heuristic (bulk query)
+                # Use a temporary table approach for better performance with large datasets
+                existing_heuristic = set()
+                if heuristic_keys:
+                    # For large datasets, use a temp table approach
+                    if len(heuristic_keys) > 100:
+                        # Create temp table
+                        cur.execute("""
+                            CREATE TEMP TABLE temp_duplicate_check (
+                                check_date DATE,
+                                check_amount DECIMAL,
+                                check_description TEXT
+                            ) ON COMMIT DROP
+                        """)
+                        
+                        # Insert keys to check
+                        cur.executemany("""
+                            INSERT INTO temp_duplicate_check (check_date, check_amount, check_description)
+                            VALUES (%s, %s, %s)
+                        """, heuristic_keys)
+                        
+                        # Join with existing transactions
+                        cur.execute("""
+                            SELECT DISTINCT t.date, t.amount, t.description
+                            FROM pharma.bank_transactions t
+                            INNER JOIN temp_duplicate_check tmp
+                            ON t.date = tmp.check_date
+                            AND t.amount = tmp.check_amount
+                            AND t.description = tmp.check_description
+                            WHERE t.bank_account_id = %s
+                        """, (bank_account_id,))
+                        
                         existing_heuristic = {
                             (row['date'], row['amount'], row['description']) 
                             for row in cur.fetchall()
                         }
+                    else:
+                        # For smaller datasets, use OR conditions (simpler)
+                        conditions = []
+                        params = [bank_account_id]
+                        for date, amount, desc in heuristic_keys:
+                            conditions.append("(date = %s AND amount = %s AND description = %s)")
+                            params.extend([date, amount, desc])
+                        
+                        if conditions:
+                            query = f"""
+                                SELECT DISTINCT date, amount, description 
+                                FROM pharma.bank_transactions
+                                WHERE bank_account_id = %s AND ({' OR '.join(conditions)})
+                            """
+                            cur.execute(query, params)
+                            existing_heuristic = {
+                                (row['date'], row['amount'], row['description']) 
+                                for row in cur.fetchall()
+                            }
+                
+                # Filter out duplicates
+                filtered_results = []
+                for result in valid_results:
+                    is_duplicate = False
+                    
+                    if result.external_id:
+                        if result.external_id in existing_external_ids:
+                            is_duplicate = True
+                    else:
+                        key = (result.date, result.amount, result.description)
+                        if key in existing_heuristic:
+                            is_duplicate = True
+                    
+                    if is_duplicate:
+                        transactions_skipped += 1
+                    else:
+                        filtered_results.append(result)
+                
+                valid_results = filtered_results
             
-            # Filter out duplicates
-            filtered_results = []
-            for result in valid_results:
-                is_duplicate = False
-                
-                if result.external_id:
-                    if result.external_id in existing_external_ids:
-                        is_duplicate = True
-                else:
-                    key = (result.date, result.amount, result.description)
-                    if key in existing_heuristic:
-                        is_duplicate = True
-                
-                if is_duplicate:
-                    transactions_skipped += 1
-                else:
-                    filtered_results.append(result)
+            # Batch insert transactions (much faster than individual inserts)
+            # Use chunked inserts for very large datasets to avoid huge transactions
+            BATCH_SIZE = 500  # Insert in batches of 500 to avoid huge transactions
             
-            valid_results = filtered_results
-        
-        # Batch insert transactions (much faster than individual inserts)
-        # Use chunked inserts for very large datasets to avoid huge transactions
-        BATCH_SIZE = 500  # Insert in batches of 500 to avoid huge transactions
-        
-        if valid_results:
-            # Prepare batch insert data
-            insert_data = []
-            for result in valid_results:
-                raw_description = None
-                if result.raw_data:
-                    raw_description = (
-                        result.raw_data.get('Description') or 
-                        result.raw_data.get('Transaction Description') or
-                        result.raw_data.get('Narrative')
-                    )
+            if valid_results:
+                # Prepare batch insert data
+                insert_data = []
+                for result in valid_results:
+                    raw_description = None
+                    if result.raw_data:
+                        raw_description = (
+                            result.raw_data.get('Description') or 
+                            result.raw_data.get('Transaction Description') or
+                            result.raw_data.get('Narrative')
+                        )
+                    
+                    # Convert Decimal to float for database insertion (PostgreSQL handles both, but float is safer)
+                    amount_value = float(result.amount) if result.amount is not None else None
+                    balance_value = float(result.balance) if result.balance is not None else None
+                    
+                    insert_data.append((
+                        batch_id,
+                        bank_account_id,
+                        pharmacy_id,
+                        result.date,
+                        result.description,
+                        raw_description,
+                        result.reference,
+                        amount_value,
+                        balance_value,
+                        json.dumps(result.raw_data) if result.raw_data else None,
+                        result.external_id
+                    ))
                 
-                # Convert Decimal to float for database insertion (PostgreSQL handles both, but float is safer)
-                amount_value = float(result.amount) if result.amount is not None else None
-                balance_value = float(result.balance) if result.balance is not None else None
-                
-                insert_data.append((
-                    batch_id,
-                    bank_account_id,
-                    pharmacy_id,
-                    result.date,
-                    result.description,
-                    raw_description,
-                    result.reference,
-                    amount_value,
-                    balance_value,
-                    json.dumps(result.raw_data) if result.raw_data else None,
-                    result.external_id
-                ))
+                # Insert in chunks to avoid huge transactions
+                for i in range(0, len(insert_data), BATCH_SIZE):
+                    chunk = insert_data[i:i + BATCH_SIZE]
+                    try:
+                        cur.executemany("""
+                            INSERT INTO pharma.bank_transactions
+                            (bank_import_batch_id, bank_account_id, pharmacy_id, date, description,
+                             raw_description, reference, amount, balance, raw_data, external_id)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """, chunk)
+                        transactions_inserted += len(chunk)
+                    except Exception as e:
+                        # If batch insert fails, try individual inserts for this chunk
+                        # This handles constraint violations gracefully
+                        for data in chunk:
+                            try:
+                                cur.execute("""
+                                    INSERT INTO pharma.bank_transactions
+                                    (bank_import_batch_id, bank_account_id, pharmacy_id, date, description,
+                                     raw_description, reference, amount, balance, raw_data, external_id)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                """, data)
+                                transactions_inserted += 1
+                            except Exception:
+                                transactions_skipped += 1
+                                continue
             
-            # Insert in chunks to avoid huge transactions
-            for i in range(0, len(insert_data), BATCH_SIZE):
-                chunk = insert_data[i:i + BATCH_SIZE]
+            # Insert errors
+            errors_count = 0
+            for idx, result in enumerate(error_results):
                 try:
-                    cur.executemany("""
-                        INSERT INTO pharma.bank_transactions
-                        (bank_import_batch_id, bank_account_id, pharmacy_id, date, description,
-                         raw_description, reference, amount, balance, raw_data, external_id)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """, chunk)
-                    transactions_inserted += len(chunk)
+                    row_number = result.raw_data.get('_row_number', idx + 2) if result.raw_data else idx + 2
+                    cur.execute("""
+                        INSERT INTO pharma.bank_import_errors
+                        (bank_import_batch_id, row_number, raw_data, error_message)
+                        VALUES (%s, %s, %s, %s)
+                    """, (
+                        batch_id,
+                        row_number,
+                        json.dumps(result.raw_data) if result.raw_data else None,
+                        result.error or "Unknown error"
+                    ))
+                    errors_count += 1
                 except Exception as e:
-                    # If batch insert fails, try individual inserts for this chunk
-                    # This handles constraint violations gracefully
-                    for data in chunk:
-                        try:
-                            cur.execute("""
-                                INSERT INTO pharma.bank_transactions
-                                (bank_import_batch_id, bank_account_id, pharmacy_id, date, description,
-                                 raw_description, reference, amount, balance, raw_data, external_id)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            """, data)
-                            transactions_inserted += 1
-                        except Exception:
-                            transactions_skipped += 1
-                            continue
-        
-        # Insert errors
-        errors_count = 0
-        for idx, result in enumerate(error_results):
-            try:
-                row_number = result.raw_data.get('_row_number', idx + 2) if result.raw_data else idx + 2
-                cur.execute("""
-                    INSERT INTO pharma.bank_import_errors
-                    (bank_import_batch_id, row_number, raw_data, error_message)
-                    VALUES (%s, %s, %s, %s)
-                """, (
-                    batch_id,
-                    row_number,
-                    json.dumps(result.raw_data) if result.raw_data else None,
-                    result.error or "Unknown error"
-                ))
-                errors_count += 1
-            except Exception as e:
-                # Log error but continue
-                continue
-        
+                    # Log error but continue
+                    continue
+            
             conn.commit()
             
             return ImportConfirmResponse(
