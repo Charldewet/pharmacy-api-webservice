@@ -5,9 +5,15 @@ Parses CSV files from different South African banks into standardized format.
 
 import csv
 import io
+import re
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from decimal import Decimal, InvalidOperation
+try:
+    from dateutil import parser as date_parser
+    DATEUTIL_AVAILABLE = True
+except ImportError:
+    DATEUTIL_AVAILABLE = False
 
 
 class BankParseResult:
@@ -116,6 +122,16 @@ class BankParser:
             return None
     
     @staticmethod
+    def _find_field_case_insensitive(row: Dict[str, str], field_names: List[str]) -> Optional[str]:
+        """Find a field in row using case-insensitive matching"""
+        row_lower = {k.lower(): v for k, v in row.items()}
+        for field in field_names:
+            field_lower = field.lower()
+            if field_lower in row_lower and row_lower[field_lower]:
+                return row_lower[field_lower]
+        return None
+    
+    @staticmethod
     def _parse_date_string(date_str: str, formats: List[str]) -> Optional[str]:
         """Try parsing date string with multiple formats"""
         if not date_str or date_str.strip() == '':
@@ -123,12 +139,53 @@ class BankParser:
         
         date_str = date_str.strip()
         
+        # Try explicit formats first
         for fmt in formats:
             try:
                 dt = datetime.strptime(date_str, fmt)
                 return dt.strftime('%Y-%m-%d')
             except ValueError:
                 continue
+        
+        # If dateutil is available, try flexible parsing as fallback
+        if DATEUTIL_AVAILABLE:
+            try:
+                dt = date_parser.parse(date_str, dayfirst=True)  # dayfirst=True for DD/MM/YYYY preference
+                return dt.strftime('%Y-%m-%d')
+            except (ValueError, TypeError, OverflowError):
+                pass
+        
+        # Try some common variations manually
+        # Handle dates like "29/11/2025" or "29-11-2025"
+        date_patterns = [
+            (r'^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$', '%d/%m/%Y'),  # DD/MM/YYYY or DD-MM-YYYY
+            (r'^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$', '%Y/%m/%d'),  # YYYY/MM/DD or YYYY-MM-DD
+            (r'^(\d{1,2})[/-](\d{1,2})[/-](\d{2})$', '%d/%m/%y'),   # DD/MM/YY or DD-MM-YY
+        ]
+        
+        for pattern, fmt_template in date_patterns:
+            match = re.match(pattern, date_str)
+            if match:
+                try:
+                    # Normalize separator
+                    normalized = date_str.replace('-', '/')
+                    # Try parsing with the template format
+                    if '/' in normalized:
+                        parts = normalized.split('/')
+                        if len(parts) == 3:
+                            if fmt_template == '%d/%m/%Y':
+                                day, month, year = parts
+                            elif fmt_template == '%Y/%m/%d':
+                                year, month, day = parts
+                            else:  # %d/%m/%y
+                                day, month, year = parts
+                                year = '20' + year if len(year) == 2 else year
+                            
+                            # Validate and parse
+                            dt = datetime(int(year), int(month), int(day))
+                            return dt.strftime('%Y-%m-%d')
+                except (ValueError, TypeError):
+                    continue
         
         return None
 
@@ -138,35 +195,43 @@ class FNBParser(BankParser):
     
     def _parse_date(self, row: Dict[str, str]) -> Optional[str]:
         """FNB typically uses formats like: 2025-03-15 or 15/03/2025"""
-        date_fields = ['Date', 'Transaction Date', 'Value Date']
+        date_fields = ['Date', 'Transaction Date', 'Value Date', 'Posting Date', 'Effective Date']
         
-        for field in date_fields:
-            if field in row and row[field]:
-                date_str = row[field].strip()
-                # Try common formats
-                formats = [
-                    '%Y-%m-%d',
-                    '%d/%m/%Y',
-                    '%d-%m-%Y',
-                    '%Y/%m/%d',
-                    '%d %b %Y',
-                    '%d %B %Y'
-                ]
-                parsed = self._parse_date_string(date_str, formats)
-                if parsed:
-                    return parsed
+        # Try case-insensitive field matching first
+        date_str = self._find_field_case_insensitive(row, date_fields)
+        if not date_str:
+            return None
         
-        return None
+        date_str = date_str.strip()
+        if not date_str:
+            return None
+        
+        # Try common formats (order matters - most common first)
+        formats = [
+            '%d/%m/%Y',      # DD/MM/YYYY (most common in SA)
+            '%d-%m-%Y',      # DD-MM-YYYY
+            '%Y-%m-%d',      # YYYY-MM-DD (ISO)
+            '%Y/%m/%d',      # YYYY/MM/DD
+            '%d/%m/%y',      # DD/MM/YY
+            '%d-%m-%y',      # DD-MM-YY
+            '%d %b %Y',      # DD Mon YYYY
+            '%d %B %Y',      # DD Month YYYY
+            '%b %d, %Y',     # Mon DD, YYYY
+            '%B %d, %Y',     # Month DD, YYYY
+            '%d.%m.%Y',      # DD.MM.YYYY
+            '%Y.%m.%d',      # YYYY.MM.DD
+        ]
+        
+        parsed = self._parse_date_string(date_str, formats)
+        return parsed
     
     def _get_description(self, row: Dict[str, str]) -> Optional[str]:
         """FNB description fields"""
         desc_fields = ['Description', 'Transaction Description', 'Narrative', 'Details']
         
-        for field in desc_fields:
-            if field in row and row[field]:
-                return row[field]
-        
-        return None
+        # Try case-insensitive matching
+        desc = self._find_field_case_insensitive(row, desc_fields)
+        return desc
     
     def _parse_reference(self, row: Dict[str, str]) -> Optional[str]:
         """FNB reference fields"""
@@ -180,26 +245,28 @@ class FNBParser(BankParser):
     
     def _parse_amount(self, row: Dict[str, str]) -> Optional[Decimal]:
         """FNB amount fields - positive for credits, negative for debits"""
-        amount_fields = ['Amount', 'Transaction Amount', 'Debit', 'Credit']
+        # Try debit/credit fields first (case-insensitive)
+        row_lower = {k.lower(): v for k, v in row.items()}
         
-        # Try debit/credit fields first
         debit = None
         credit = None
         
-        if 'Debit' in row and row['Debit']:
-            debit = self._parse_decimal(row['Debit'])
-        if 'Credit' in row and row['Credit']:
-            credit = self._parse_decimal(row['Credit'])
+        if 'debit' in row_lower and row_lower['debit']:
+            debit = self._parse_decimal(row_lower['debit'])
+        if 'credit' in row_lower and row_lower['credit']:
+            credit = self._parse_decimal(row_lower['credit'])
         
         if debit is not None:
             return -abs(debit)  # Negative for debits
         if credit is not None:
             return abs(credit)  # Positive for credits
         
-        # Try single amount field
+        # Try single amount field (case-insensitive)
+        amount_fields = ['Amount', 'Transaction Amount', 'Amount Debit', 'Amount Credit']
         for field in amount_fields:
-            if field in row and row[field]:
-                amount = self._parse_decimal(row[field])
+            amount_str = self._find_field_case_insensitive(row, [field])
+            if amount_str:
+                amount = self._parse_decimal(amount_str)
                 if amount is not None:
                     # If amount is already negative, keep it; otherwise assume it's a debit
                     return amount if amount < 0 else -abs(amount)
@@ -222,34 +289,42 @@ class ABSAParser(BankParser):
     
     def _parse_date(self, row: Dict[str, str]) -> Optional[str]:
         """ABSA date formats"""
-        date_fields = ['Date', 'Transaction Date', 'Posting Date', 'Value Date']
+        date_fields = ['Date', 'Transaction Date', 'Posting Date', 'Value Date', 'Effective Date']
         
-        for field in date_fields:
-            if field in row and row[field]:
-                date_str = row[field].strip()
-                formats = [
-                    '%Y-%m-%d',
-                    '%d/%m/%Y',
-                    '%d-%m-%Y',
-                    '%Y/%m/%d',
-                    '%d %b %Y',
-                    '%d %B %Y'
-                ]
-                parsed = self._parse_date_string(date_str, formats)
-                if parsed:
-                    return parsed
+        # Try case-insensitive field matching first
+        date_str = self._find_field_case_insensitive(row, date_fields)
+        if not date_str:
+            return None
         
-        return None
+        date_str = date_str.strip()
+        if not date_str:
+            return None
+        
+        formats = [
+            '%d/%m/%Y',      # DD/MM/YYYY (most common in SA)
+            '%d-%m-%Y',      # DD-MM-YYYY
+            '%Y-%m-%d',      # YYYY-MM-DD (ISO)
+            '%Y/%m/%d',      # YYYY/MM/DD
+            '%d/%m/%y',      # DD/MM/YY
+            '%d-%m-%y',      # DD-MM-YY
+            '%d %b %Y',      # DD Mon YYYY
+            '%d %B %Y',      # DD Month YYYY
+            '%b %d, %Y',     # Mon DD, YYYY
+            '%B %d, %Y',     # Month DD, YYYY
+            '%d.%m.%Y',      # DD.MM.YYYY
+            '%Y.%m.%d',      # YYYY.MM.DD
+        ]
+        
+        parsed = self._parse_date_string(date_str, formats)
+        return parsed
     
     def _get_description(self, row: Dict[str, str]) -> Optional[str]:
         """ABSA description fields"""
         desc_fields = ['Description', 'Transaction Description', 'Narrative', 'Details', 'Memo']
         
-        for field in desc_fields:
-            if field in row and row[field]:
-                return row[field]
-        
-        return None
+        # Try case-insensitive matching
+        desc = self._find_field_case_insensitive(row, desc_fields)
+        return desc
     
     def _parse_reference(self, row: Dict[str, str]) -> Optional[str]:
         """ABSA reference fields"""
@@ -263,30 +338,32 @@ class ABSAParser(BankParser):
     
     def _parse_amount(self, row: Dict[str, str]) -> Optional[Decimal]:
         """ABSA amount fields"""
-        amount_fields = ['Amount', 'Transaction Amount', 'Debit', 'Credit', 'Withdrawal', 'Deposit']
+        # Try debit/credit fields first (case-insensitive)
+        row_lower = {k.lower(): v for k, v in row.items()}
         
-        # Try debit/credit fields first
         debit = None
         credit = None
         
-        if 'Debit' in row and row['Debit']:
-            debit = self._parse_decimal(row['Debit'])
-        if 'Credit' in row and row['Credit']:
-            credit = self._parse_decimal(row['Credit'])
-        if 'Withdrawal' in row and row['Withdrawal']:
-            debit = self._parse_decimal(row['Withdrawal'])
-        if 'Deposit' in row and row['Deposit']:
-            credit = self._parse_decimal(row['Deposit'])
+        if 'debit' in row_lower and row_lower['debit']:
+            debit = self._parse_decimal(row_lower['debit'])
+        if 'credit' in row_lower and row_lower['credit']:
+            credit = self._parse_decimal(row_lower['credit'])
+        if 'withdrawal' in row_lower and row_lower['withdrawal']:
+            debit = self._parse_decimal(row_lower['withdrawal'])
+        if 'deposit' in row_lower and row_lower['deposit']:
+            credit = self._parse_decimal(row_lower['deposit'])
         
         if debit is not None:
             return -abs(debit)
         if credit is not None:
             return abs(credit)
         
-        # Try single amount field
+        # Try single amount field (case-insensitive)
+        amount_fields = ['Amount', 'Transaction Amount', 'Amount Debit', 'Amount Credit']
         for field in amount_fields:
-            if field in row and row[field]:
-                amount = self._parse_decimal(row[field])
+            amount_str = self._find_field_case_insensitive(row, [field])
+            if amount_str:
+                amount = self._parse_decimal(amount_str)
                 if amount is not None:
                     return amount if amount < 0 else -abs(amount)
         
@@ -308,32 +385,42 @@ class StandardBankParser(BankParser):
     
     def _parse_date(self, row: Dict[str, str]) -> Optional[str]:
         """Standard Bank date formats"""
-        date_fields = ['Date', 'Transaction Date', 'Posting Date']
+        date_fields = ['Date', 'Transaction Date', 'Posting Date', 'Value Date', 'Effective Date']
         
-        for field in date_fields:
-            if field in row and row[field]:
-                date_str = row[field].strip()
-                formats = [
-                    '%Y-%m-%d',
-                    '%d/%m/%Y',
-                    '%d-%m-%Y',
-                    '%Y/%m/%d'
-                ]
-                parsed = self._parse_date_string(date_str, formats)
-                if parsed:
-                    return parsed
+        # Try case-insensitive field matching first
+        date_str = self._find_field_case_insensitive(row, date_fields)
+        if not date_str:
+            return None
         
-        return None
+        date_str = date_str.strip()
+        if not date_str:
+            return None
+        
+        formats = [
+            '%d/%m/%Y',      # DD/MM/YYYY (most common in SA)
+            '%d-%m-%Y',      # DD-MM-YYYY
+            '%Y-%m-%d',      # YYYY-MM-DD (ISO)
+            '%Y/%m/%d',      # YYYY/MM/DD
+            '%d/%m/%y',      # DD/MM/YY
+            '%d-%m-%y',      # DD-MM-YY
+            '%d %b %Y',      # DD Mon YYYY
+            '%d %B %Y',      # DD Month YYYY
+            '%b %d, %Y',     # Mon DD, YYYY
+            '%B %d, %Y',     # Month DD, YYYY
+            '%d.%m.%Y',      # DD.MM.YYYY
+            '%Y.%m.%d',      # YYYY.MM.DD
+        ]
+        
+        parsed = self._parse_date_string(date_str, formats)
+        return parsed
     
     def _get_description(self, row: Dict[str, str]) -> Optional[str]:
         """Standard Bank description fields"""
         desc_fields = ['Description', 'Transaction Description', 'Narrative', 'Details']
         
-        for field in desc_fields:
-            if field in row and row[field]:
-                return row[field]
-        
-        return None
+        # Try case-insensitive matching
+        desc = self._find_field_case_insensitive(row, desc_fields)
+        return desc
     
     def _parse_reference(self, row: Dict[str, str]) -> Optional[str]:
         """Standard Bank reference fields"""
@@ -347,24 +434,28 @@ class StandardBankParser(BankParser):
     
     def _parse_amount(self, row: Dict[str, str]) -> Optional[Decimal]:
         """Standard Bank amount fields"""
-        amount_fields = ['Amount', 'Transaction Amount', 'Debit', 'Credit']
+        # Try debit/credit fields first (case-insensitive)
+        row_lower = {k.lower(): v for k, v in row.items()}
         
         debit = None
         credit = None
         
-        if 'Debit' in row and row['Debit']:
-            debit = self._parse_decimal(row['Debit'])
-        if 'Credit' in row and row['Credit']:
-            credit = self._parse_decimal(row['Credit'])
+        if 'debit' in row_lower and row_lower['debit']:
+            debit = self._parse_decimal(row_lower['debit'])
+        if 'credit' in row_lower and row_lower['credit']:
+            credit = self._parse_decimal(row_lower['credit'])
         
         if debit is not None:
             return -abs(debit)
         if credit is not None:
             return abs(credit)
         
+        # Try single amount field (case-insensitive)
+        amount_fields = ['Amount', 'Transaction Amount', 'Amount Debit', 'Amount Credit']
         for field in amount_fields:
-            if field in row and row[field]:
-                amount = self._parse_decimal(row[field])
+            amount_str = self._find_field_case_insensitive(row, [field])
+            if amount_str:
+                amount = self._parse_decimal(amount_str)
                 if amount is not None:
                     return amount if amount < 0 else -abs(amount)
         
