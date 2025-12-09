@@ -325,6 +325,18 @@ class ImportSummary(BaseModel):
     min_date: Optional[str] = None
     max_date: Optional[str] = None
 
+class SuspectedDuplicate(BaseModel):
+    """A transaction that might be a duplicate"""
+    row_number: int
+    date: str
+    description: str
+    amount: float
+    reference: Optional[str] = None
+    existing_transaction_id: Optional[int] = None
+    existing_date: Optional[str] = None
+    existing_description: Optional[str] = None
+    match_reason: str  # e.g., "Exact match (date + amount + description)" or "Similar match (date + amount)"
+
 class ImportPreviewResponse(BaseModel):
     """Response from preview endpoint"""
     pharmacy_id: int
@@ -342,18 +354,6 @@ class ImportConfirmRequest(BaseModel):
     transactions: List[ParsedTransaction]
     errors: List[ImportError]
     notes: Optional[str] = None
-
-class SuspectedDuplicate(BaseModel):
-    """A transaction that might be a duplicate"""
-    row_number: int
-    date: str
-    description: str
-    amount: float
-    reference: Optional[str] = None
-    existing_transaction_id: Optional[int] = None
-    existing_date: Optional[str] = None
-    existing_description: Optional[str] = None
-    match_reason: str  # e.g., "Exact match (date + amount + description)" or "Similar match (date + amount)"
 
 class ImportConfirmResponse(BaseModel):
     """Response from confirm endpoint"""
