@@ -8,6 +8,7 @@ from .routers import broadcast
 from .routers import authn
 from .routers import admin
 from .routers import debtors
+from .routers import banking, ledger, bank_imports, accounts
 
 class ORJSONResponse:
     media_type = "application/json"
@@ -48,6 +49,10 @@ app.include_router(broadcast.router)
 app.include_router(authn.router)
 app.include_router(admin.router)
 app.include_router(debtors.router)
+app.include_router(banking.router)
+app.include_router(ledger.router)
+app.include_router(bank_imports.router)
+app.include_router(accounts.router)
 
 @app.get("/health")
 async def health_check():

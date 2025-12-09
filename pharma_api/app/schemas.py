@@ -213,3 +213,166 @@ class CommunicationLog(BaseModel):
     error_message: Optional[str] = None
     sent_at: Optional[datetime] = None
     created_at: datetime
+
+# ========== BANKING & LEDGER SCHEMAS ==========
+
+class BankAccountBase(BaseModel):
+    name: str
+    bank_name: str
+    account_number: Optional[str] = None
+    branch_code: Optional[str] = None
+    currency: str = "ZAR"
+    is_active: bool = True
+
+class BankAccountCreate(BankAccountBase):
+    pharmacy_id: int
+
+class BankAccountUpdate(BaseModel):
+    name: Optional[str] = None
+    bank_name: Optional[str] = None
+    account_number: Optional[str] = None
+    branch_code: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class BankAccount(BankAccountBase):
+    id: int
+    pharmacy_id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class BankImportBatch(BaseModel):
+    id: int
+    bank_account_id: int
+    pharmacy_id: int
+    period_start: Optional[date] = None
+    period_end: Optional[date] = None
+    file_name: str
+    uploaded_by_user_id: Optional[int] = None
+    uploaded_at: datetime
+    status: str  # IMPORTED, CLASSIFIED_PARTIAL, CLASSIFIED_COMPLETE, POSTED_TO_LEDGER
+    notes: Optional[str] = None
+
+class BankTransaction(BaseModel):
+    id: int
+    bank_import_batch_id: int
+    bank_account_id: int
+    pharmacy_id: int
+    date: date
+    description: str
+    raw_description: Optional[str] = None
+    reference: Optional[str] = None
+    amount: float
+    balance: Optional[float] = None
+    raw_data: Optional[dict] = None
+    external_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+class LedgerEntryBase(BaseModel):
+    pharmacy_id: int
+    date: date
+    description: str
+    amount: float
+    debit_account_id: int
+    credit_account_id: int
+    source: str  # PHARMASIGHT, BANK, MANUAL
+    source_reference_type: Optional[str] = None
+    source_reference_id: Optional[str] = None
+
+class LedgerEntryCreate(LedgerEntryBase):
+    created_by_user_id: Optional[int] = None
+
+class LedgerEntry(LedgerEntryBase):
+    id: int
+    created_by_user_id: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# ========== BANK IMPORT SCHEMAS ==========
+
+class ParsedTransaction(BaseModel):
+    """A parsed transaction from CSV preview"""
+    row_number: int
+    date: str
+    description: str
+    reference: Optional[str] = None
+    amount: float
+    balance: Optional[float] = None
+
+class ImportError(BaseModel):
+    """An error encountered during CSV parsing"""
+    row_number: int
+    error: str
+    raw_data: Optional[dict] = None
+
+class ImportSummary(BaseModel):
+    """Summary statistics for an import"""
+    transaction_count: int
+    total_in: float
+    total_out: float
+    min_date: Optional[str] = None
+    max_date: Optional[str] = None
+
+class ImportPreviewResponse(BaseModel):
+    """Response from preview endpoint"""
+    pharmacy_id: int
+    bank_account_id: int
+    summary: ImportSummary
+    sample_transactions: List[ParsedTransaction]
+    errors: List[ImportError]
+
+class ImportConfirmRequest(BaseModel):
+    """Request to confirm and save an import"""
+    pharmacy_id: int
+    bank_account_id: int
+    file_name: str
+    transactions: List[ParsedTransaction]
+    errors: List[ImportError]
+    notes: Optional[str] = None
+
+class ImportConfirmResponse(BaseModel):
+    """Response from confirm endpoint"""
+    bank_import_batch_id: int
+    transactions_inserted: int
+    transactions_skipped_as_duplicates: int
+    errors_count: int
+    period_start: Optional[str] = None
+    period_end: Optional[str] = None
+    status: str
+
+# ========== CHART OF ACCOUNTS SCHEMAS ==========
+
+class AccountBase(BaseModel):
+    code: str
+    name: str
+    type: str
+    category: str
+    parent_account_id: Optional[int] = None
+    is_active: bool = True
+    display_order: int = 0
+    notes: Optional[str] = None
+
+class AccountCreate(AccountBase):
+    pass
+
+class AccountUpdate(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    parent_account_id: Optional[int] = None
+    is_active: Optional[bool] = None
+    display_order: Optional[int] = None
+    notes: Optional[str] = None
+
+class Account(AccountBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
