@@ -87,102 +87,32 @@ class BankStatementImporter:
         self.skip_duplicates = skip_duplicates
     
     def _import(self) -> ImportResult:
-        """Main import logic - optimized for speed"""
+        """Main import logic - fastest path: no duplicate pre-check, bulk insert, ignore duplicates."""
         import logging
         import json
         logger = logging.getLogger(__name__)
-        
-        # Parse CSV (this is fast)
+
+        # Parse CSV (already fast)
         parse_result = BankCsvParser.parse(self.file_content)
-        
+
         inserted = 0
-        skipped = 0
-        suspected_duplicates = []
-        exact_duplicates = set()
+        skipped = 0  # will count rows skipped by ON CONFLICT
         batch_id = None
-        
+
         with self.conn.cursor() as cur:
-            # Preload potential duplicates in bulk to avoid per-row queries
-            existing_by_external, existing_by_exact, existing_by_similar = self._load_existing_transactions(cur, parse_result.rows)
-            
-            if self.skip_duplicates and parse_result.rows:
-                for row in parse_result.rows:
-                    external_id = self._build_external_id(row)
-                    exact_key = (row.date, row.amount, row.description)
-                    similar_key = (row.date, row.amount)
-                    
-                    external_match = existing_by_external.get(external_id)
-                    if external_match:
-                        exact_duplicates.add((row.date, row.amount, row.description))
-                        skipped += 1
-                        suspected_duplicates.append(SuspectedDuplicate(
-                            row_number=row.row_number,
-                            date=row.date,
-                            description=row.description,
-                            amount=row.amount,
-                            reference=row.reference,
-                            match_reason="High confidence: Same external_id (deterministic hash)",
-                            existing_transaction_id=external_match.get('id'),
-                            existing_date=external_match.get('date'),
-                            existing_description=external_match.get('description')
-                        ))
-                        continue
-                    
-                    exact_match = existing_by_exact.get(exact_key)
-                    if exact_match:
-                        existing_batch_id = exact_match.get('bank_import_batch_id')
-                        if existing_batch_id:
-                            exact_duplicates.add((row.date, row.amount, row.description))
-                            skipped += 1
-                            suspected_duplicates.append(SuspectedDuplicate(
-                                row_number=row.row_number,
-                                date=row.date,
-                                description=row.description,
-                                amount=row.amount,
-                                reference=row.reference,
-                                match_reason="Exact match: Same date, amount, and description (from previous import)",
-                                existing_transaction_id=exact_match.get('id'),
-                                existing_date=exact_match.get('date'),
-                                existing_description=exact_match.get('description')
-                            ))
-                            continue
-                    
-                    similar_match = existing_by_similar.get(similar_key)
-                    if similar_match:
-                        suspected_duplicates.append(SuspectedDuplicate(
-                            row_number=row.row_number,
-                            date=row.date,
-                            description=row.description,
-                            amount=row.amount,
-                            reference=row.reference,
-                            match_reason=f"Similar match: Same date ({row.date}) and amount ({row.amount}), but description differs",
-                            existing_transaction_id=similar_match.get('id'),
-                            existing_date=similar_match.get('date'),
-                            existing_description=similar_match.get('description')
-                        ))
-                
-                logger.info(f"Duplicate check (bulk): {len(exact_duplicates)} exact duplicates skipped, {len(suspected_duplicates)} suspected duplicates found")
-            
             # Create import batch
             batch_id = self._create_import_batch(cur, parse_result.summary)
-            
-            # Prepare transactions for batch insert (filter out duplicates)
+
+            # Prepare transactions for bulk insert
             transactions_to_insert = []
             for row in parse_result.rows:
-                key = (row.date, row.amount, row.description)
-                
-                # Only skip high-confidence duplicates
-                if self.skip_duplicates and key in exact_duplicates:
-                    continue
-                
-                # Prepare transaction data
                 external_id = self._build_external_id(row)
                 amount_value = float(row.amount) if row.amount is not None else None
                 balance_value = float(row.balance) if row.balance is not None else None
                 raw_data_json = json.dumps(row.raw_data) if row.raw_data else None
                 description = row.description or ""
                 raw_description = row.raw_description or description
-                
+
                 transactions_to_insert.append((
                     batch_id,
                     self.bank_account_id,
@@ -196,37 +126,35 @@ class BankStatementImporter:
                     raw_data_json,
                     external_id
                 ))
-            
-            logger.info(f"Prepared {len(transactions_to_insert)} transactions for insertion (skipped {skipped} duplicates)")
-            
+
+            logger.info(f"Prepared {len(transactions_to_insert)} transactions for insertion")
+
             if transactions_to_insert:
-                # Use SAVEPOINTs for each insert to handle duplicates gracefully
-                # This is fast and handles constraint violations without aborting the transaction
-                for data in transactions_to_insert:
-                    try:
-                        cur.execute("SAVEPOINT txn_insert")
-                        cur.execute("""
-                            INSERT INTO pharma.bank_transactions
-                            (bank_import_batch_id, bank_account_id, pharmacy_id, date, description,
-                             raw_description, reference, amount, balance, raw_data, external_id)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """, data)
-                        cur.execute("RELEASE SAVEPOINT txn_insert")
-                        inserted += 1
-                    except Exception as insert_error:
-                        cur.execute("ROLLBACK TO SAVEPOINT txn_insert")
-                        skipped += 1
-                        # Don't log every duplicate - too noisy
-                        continue
-                
-                logger.info(f"Inserted {inserted} / {len(transactions_to_insert)} transactions")
+                try:
+                    insert_sql = """
+                        INSERT INTO pharma.bank_transactions
+                        (bank_import_batch_id, bank_account_id, pharmacy_id, date, description,
+                         raw_description, reference, amount, balance, raw_data, external_id)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT DO NOTHING
+                    """
+                    BATCH = 1000
+                    for i in range(0, len(transactions_to_insert), BATCH):
+                        chunk = transactions_to_insert[i:i+BATCH]
+                        cur.executemany(insert_sql, chunk)
+                        inserted_chunk = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+                        inserted += inserted_chunk
+                    skipped = len(transactions_to_insert) - inserted
+                    logger.info(f"Inserted {inserted} / {len(transactions_to_insert)} transactions (skipped {skipped} duplicates/conflicts)")
+                except Exception as bulk_error:
+                    logger.error(f"Bulk insert failed: {str(bulk_error)}")
+                    raise
             else:
-                logger.warning(f"No transactions to insert! All {len(parse_result.rows)} transactions were skipped as duplicates or had errors.")
-            
-            # Insert parsing errors into bank_import_errors table
+                logger.warning(f"No transactions to insert! File had {len(parse_result.rows)} rows.")
+
+            # Insert parsing errors into bank_import_errors table (best-effort)
             for error in parse_result.errors:
                 try:
-                    cur.execute("SAVEPOINT err_insert")
                     cur.execute("""
                         INSERT INTO pharma.bank_import_errors
                         (bank_import_batch_id, row_number, raw_data, error_message)
@@ -237,27 +165,25 @@ class BankStatementImporter:
                         json.dumps(error.raw_data) if error.raw_data else None,
                         error.error
                     ))
-                    cur.execute("RELEASE SAVEPOINT err_insert")
                 except Exception:
-                    cur.execute("ROLLBACK TO SAVEPOINT err_insert")
                     continue
-            
+
             # Update batch status
             cur.execute("""
                 UPDATE pharma.bank_import_batches
                 SET status = 'IMPORTED'
                 WHERE id = %s
             """, (batch_id,))
-            
+
             self.conn.commit()
-        
+
         return ImportResult(
             bank_import_batch_id=batch_id,
             transactions_inserted=inserted,
             transactions_skipped_as_duplicates=skipped,
             errors=parse_result.errors,
             summary=parse_result.summary,
-            suspected_duplicates=suspected_duplicates
+            suspected_duplicates=[]  # not computed in fast-path
         )
     
     def _create_import_batch(self, cur, summary: dict) -> int:
