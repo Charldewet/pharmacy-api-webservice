@@ -365,13 +365,13 @@ def list_unmatched_transactions(pharmacy_id: int):
                 if isinstance(txn_dict.get('amount'), Decimal):
                     txn_dict['amount'] = float(txn_dict['amount'])
                 if isinstance(txn_dict.get('balance'), Decimal):
-                    txn_dict['balance'] = float(txn_dict['balance'])
+                    txn_dict['balance'] = float(txn_dict['balance']) if txn_dict['balance'] else None
                 
-                # Convert date to string
+                # Convert date to string (Pydantic will parse it)
                 if txn_dict.get('date'):
                     txn_dict['date'] = str(txn_dict['date'])
                 
-                # Convert datetime to ISO string
+                # Convert datetime to ISO string (Pydantic will parse it)
                 if txn_dict.get('created_at'):
                     txn_dict['created_at'] = txn_dict['created_at'].isoformat()
                 if txn_dict.get('updated_at'):
@@ -401,7 +401,8 @@ def list_unmatched_transactions(pharmacy_id: int):
                             suggestion_dict['updated_at'] = suggestion_dict['updated_at'].isoformat()
                         txn_dict['ai_suggestion'] = suggestion_dict
                 
-                result.append(txn_dict)
+                # Convert to Pydantic model for proper serialization
+                result.append(BankTransactionWithClassification(**txn_dict))
             
             return result
 
