@@ -325,6 +325,7 @@ class ImportPreviewResponse(BaseModel):
     bank_account_id: int
     summary: ImportSummary
     sample_transactions: List[ParsedTransaction]
+    suspected_duplicates: List[SuspectedDuplicate] = []  # Suspected duplicates found during preview
     errors: List[ImportError]
 
 class ImportConfirmRequest(BaseModel):
@@ -336,11 +337,24 @@ class ImportConfirmRequest(BaseModel):
     errors: List[ImportError]
     notes: Optional[str] = None
 
+class SuspectedDuplicate(BaseModel):
+    """A transaction that might be a duplicate"""
+    row_number: int
+    date: str
+    description: str
+    amount: float
+    reference: Optional[str] = None
+    existing_transaction_id: Optional[int] = None
+    existing_date: Optional[str] = None
+    existing_description: Optional[str] = None
+    match_reason: str  # e.g., "Exact match (date + amount + description)" or "Similar match (date + amount)"
+
 class ImportConfirmResponse(BaseModel):
     """Response from confirm endpoint"""
     bank_import_batch_id: int
     transactions_inserted: int
     transactions_skipped_as_duplicates: int
+    suspected_duplicates: List[SuspectedDuplicate] = []  # Transactions that might be duplicates
     errors_count: int
     period_start: Optional[str] = None
     period_end: Optional[str] = None

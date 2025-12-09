@@ -256,3 +256,5 @@ If you see encryption errors:
 2. The key must be a valid Fernet key (32 bytes, base64 encoded)
 3. Generate a new key if needed: `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'`
 
+
+

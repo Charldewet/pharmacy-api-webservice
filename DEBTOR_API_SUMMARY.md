@@ -210,3 +210,5 @@ const emailResponse = await fetch('/pharmacies/2/debtors/send-email', {
 });
 ```
 
+
+

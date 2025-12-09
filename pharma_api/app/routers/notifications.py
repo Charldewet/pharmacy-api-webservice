@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from typing import List, Optional, Any
+from typing import List, Optional
 from datetime import datetime
 from ..db import get_conn
 from ..auth import get_current_user_id
@@ -48,12 +48,6 @@ class SaveSettingsResponse(BaseModel):
     settings: NotificationSettings
     savedAt: datetime
 
-class NotificationItem(BaseModel):
-    id: int
-    title: str
-    body: str
-    data: Any
-    created_at: datetime
 
 def _validate_time(t: str) -> None:
     if len(t) != 5 or t[2] != ":":
@@ -80,21 +74,6 @@ def _authorize_pharmacies(cur, user_id: int, pharmacy_ids: List[int]) -> None:
     cnt = cur.fetchone()["cnt"]
     if cnt != len(pharmacy_ids):
         raise HTTPException(403, "One or more pharmacyIds are not permitted for this user")
-
-
-def _ensure_user_notifications_table(cur) -> None:
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS pharma.user_notifications (
-          id            bigserial PRIMARY KEY,
-          user_id       bigint NOT NULL REFERENCES pharma.users(user_id) ON DELETE CASCADE,
-          title         text NOT NULL,
-          body          text NOT NULL,
-          data          jsonb NOT NULL,
-          created_at    timestamptz NOT NULL DEFAULT now()
-        )
-        """
-    )
 
 
 @router.post("/push/register", response_model=PushRegisterResponse)
@@ -202,35 +181,4 @@ def save_settings(req: NotificationSettings, user_id: int = Depends(get_current_
             ),
         )
         conn.commit()
-        return SaveSettingsResponse(status="ok", settings=req, savedAt=datetime.utcnow())
-
-
-@router.get("/notifications/recent", response_model=List[NotificationItem])
-def get_recent_notifications(limit: int = 50, user_id: int = Depends(get_current_user_id)):
-    if limit < 1:
-        limit = 1
-    if limit > 200:
-        limit = 200
-    with get_conn() as conn, conn.cursor() as cur:
-        _ensure_user_notifications_table(cur)
-        cur.execute(
-            """
-            SELECT id, title, body, data, created_at
-            FROM pharma.user_notifications
-            WHERE user_id = %s
-            ORDER BY created_at DESC, id DESC
-            LIMIT %s
-            """,
-            (user_id, limit),
-        )
-        rows = cur.fetchall() or []
-        return [
-            NotificationItem(
-                id=row["id"],
-                title=row["title"],
-                body=row["body"],
-                data=row["data"],
-                created_at=row["created_at"],
-            )
-            for row in rows
-        ] 
+        return SaveSettingsResponse(status="ok", settings=req, savedAt=datetime.utcnow()) 

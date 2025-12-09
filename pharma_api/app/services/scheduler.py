@@ -7,7 +7,6 @@ import httpx
 from ..db import get_conn
 from ..utils.crypto import decrypt_token
 from .apple_push import create_apple_push_service
-from ..utils.notifications_store import insert_user_notification
 
 EXPO_URL = "https://exp.host/--/api/v2/push/send"
 
@@ -180,7 +179,6 @@ async def run_once() -> None:
                             "body": f"Daily Summary for {pname}",
                             "data": {"type": "DAILY_SUMMARY", "pharmacyCode": pcode, "pharmacyName": pname},
                         })
-                        insert_user_notification(cur, user_id, "TLC PharmaSight", f"Daily Summary for {pname}", {"type": "DAILY_SUMMARY", "pharmacyCode": pcode, "pharmacyName": pname})
                         tickets.append((user_id, "DAILY_SUMMARY", pid, idem))
                         queued += 1
 
@@ -218,7 +216,6 @@ async def run_once() -> None:
                             "body": "\n".join(product_details),
                             "data": {"type": "LOW_GP_ALERT", "pharmacyCode": pcode, "pharmacyName": pname, "lowGPItems": low_items, "threshold": threshold},
                         })
-                        insert_user_notification(cur, user_id, f"Low GP Alert - {pname}", "\n".join(product_details), {"type": "LOW_GP_ALERT", "pharmacyCode": pcode, "pharmacyName": pname, "lowGPItems": low_items, "threshold": threshold})
                         tickets.append((user_id, "LOW_GP_ALERT", pid, idem))
                         queued += 1
 

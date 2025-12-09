@@ -188,3 +188,5 @@ curl -X GET "https://pharmacy-api-webservice.onrender.com/products/LP9037679/sto
 - ✅ Guaranteed to return the product if it exists
 - ✅ Simpler code (no need to search through arrays)
 
+
+

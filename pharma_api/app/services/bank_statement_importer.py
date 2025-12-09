@@ -5,22 +5,40 @@ Based on Ruby implementation for consistency.
 """
 
 import hashlib
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from datetime import date
 from decimal import Decimal
 
 from .bank_csv_parser import BankCsvParser, ParseResult, ParsedRow
 
 
+class SuspectedDuplicate:
+    """Represents a transaction that might be a duplicate"""
+    def __init__(self, row_number: int, date: date, description: str, amount: Decimal,
+                 reference: Optional[str], match_reason: str, existing_transaction_id: Optional[int] = None,
+                 existing_date: Optional[date] = None, existing_description: Optional[str] = None):
+        self.row_number = row_number
+        self.date = date
+        self.description = description
+        self.amount = amount
+        self.reference = reference
+        self.match_reason = match_reason
+        self.existing_transaction_id = existing_transaction_id
+        self.existing_date = existing_date
+        self.existing_description = existing_description
+
+
 class ImportResult:
     """Result of importing a bank statement"""
     def __init__(self, bank_import_batch_id: int, transactions_inserted: int,
-                 transactions_skipped_as_duplicates: int, errors: list, summary: dict):
+                 transactions_skipped_as_duplicates: int, errors: list, summary: dict,
+                 suspected_duplicates: list = None):
         self.bank_import_batch_id = bank_import_batch_id
         self.transactions_inserted = transactions_inserted
         self.transactions_skipped_as_duplicates = transactions_skipped_as_duplicates
         self.errors = errors
         self.summary = summary
+        self.suspected_duplicates = suspected_duplicates or []
 
 
 class BankStatementImporter:
@@ -78,34 +96,89 @@ class BankStatementImporter:
         parse_result = BankCsvParser.parse(self.file_content)
         
         with self.conn.cursor() as cur:
-            # Create import batch
-            batch_id = self._create_import_batch(cur, parse_result.summary)
-            
             inserted = 0
             skipped = 0
             insert_errors = []
             
-            # Batch duplicate detection for better performance
+            # Duplicate detection - less strict: only skip if external_id matches or very high confidence
+            suspected_duplicates = []
+            exact_duplicates = set()
+            
             if self.skip_duplicates and parse_result.rows:
-                # Collect all transaction keys to check
-                transaction_keys = [
-                    (row.date, float(row.amount), row.description)
-                    for row in parse_result.rows
-                ]
+                # Check for duplicates - be less strict
+                # Only skip if we have a very high confidence match (external_id or exact match)
+                for row in parse_result.rows:
+                    external_id = self._build_external_id(row)
+                    
+                    # Check for duplicate by external_id first (highest confidence)
+                    external_id_match = self._check_external_id_duplicate(cur, external_id)
+                    if external_id_match:
+                        exact_duplicates.add((row.date, float(row.amount), row.description))
+                        skipped += 1
+                        suspected_duplicates.append(SuspectedDuplicate(
+                            row_number=row.row_number,
+                            date=row.date,
+                            description=row.description,
+                            amount=row.amount,
+                            reference=row.reference,
+                            match_reason="High confidence: Same external_id (deterministic hash)",
+                            existing_transaction_id=external_id_match.get('id'),
+                            existing_date=external_id_match.get('date'),
+                            existing_description=external_id_match.get('description')
+                        ))
+                        continue
+                    
+                    # Check for exact duplicate (date + amount + description) - medium confidence
+                    # Only skip if it's from a different import batch (not same file re-imported)
+                    exact_match = self._check_exact_duplicate(cur, row)
+                    if exact_match:
+                        existing_batch_id = exact_match.get('bank_import_batch_id')
+                        # Skip if it exists and is from a different batch (avoid re-importing same file)
+                        # But be lenient - only skip if we're very confident it's a duplicate
+                        if existing_batch_id:
+                            exact_duplicates.add((row.date, float(row.amount), row.description))
+                            skipped += 1
+                            suspected_duplicates.append(SuspectedDuplicate(
+                                row_number=row.row_number,
+                                date=row.date,
+                                description=row.description,
+                                amount=row.amount,
+                                reference=row.reference,
+                                match_reason="Exact match: Same date, amount, and description (from previous import)",
+                                existing_transaction_id=exact_match.get('id'),
+                                existing_date=exact_match.get('date'),
+                                existing_description=exact_match.get('description')
+                            ))
+                            continue
+                    
+                    # Check for similar match (date + amount only) - low confidence, don't skip
+                    similar_match = self._check_similar_duplicate(cur, row)
+                    if similar_match:
+                        # Flag as suspected but don't skip - let user decide
+                        suspected_duplicates.append(SuspectedDuplicate(
+                            row_number=row.row_number,
+                            date=row.date,
+                            description=row.description,
+                            amount=row.amount,
+                            reference=row.reference,
+                            match_reason=f"Similar match: Same date ({row.date}) and amount ({row.amount}), but description differs",
+                            existing_transaction_id=similar_match.get('id'),
+                            existing_date=similar_match.get('date'),
+                            existing_description=similar_match.get('description')
+                        ))
                 
-                # Bulk check for duplicates
-                existing_keys = self._bulk_check_duplicates(cur, transaction_keys)
-                logger.info(f"Duplicate check: {len(existing_keys)} duplicates found out of {len(transaction_keys)} transactions")
-            else:
-                existing_keys = set()
+                logger.info(f"Duplicate check: {len(exact_duplicates)} exact duplicates skipped, {len(suspected_duplicates)} suspected duplicates found")
+            
+            # Create import batch AFTER duplicate check (so we know how many will be inserted)
+            batch_id = self._create_import_batch(cur, parse_result.summary)
             
             # Prepare transactions for batch insert
             transactions_to_insert = []
             for row in parse_result.rows:
                 key = (row.date, float(row.amount), row.description)
                 
-                if self.skip_duplicates and key in existing_keys:
-                    skipped += 1
+                # Only skip high-confidence duplicates
+                if self.skip_duplicates and key in exact_duplicates:
                     continue
                 
                 # Add to insert list
@@ -201,7 +274,8 @@ class BankStatementImporter:
                 transactions_inserted=inserted,
                 transactions_skipped_as_duplicates=skipped,
                 errors=parse_result.errors,
-                summary=parse_result.summary
+                summary=parse_result.summary,
+                suspected_duplicates=suspected_duplicates
             )
     
     def _create_import_batch(self, cur, summary: dict) -> int:
@@ -266,69 +340,74 @@ class BankStatementImporter:
             external_id
         ))
     
-    def _bulk_check_duplicates(self, cur, transaction_keys: list) -> set:
+    def _check_external_id_duplicate(self, cur, external_id: str) -> Optional[dict]:
         """
-        Bulk check for duplicate transactions.
-        Returns a set of (date, amount, description) tuples that already exist.
+        Check for duplicate by external_id (highest confidence).
+        Returns existing transaction info if found, None otherwise.
         """
-        if not transaction_keys:
-            return set()
-        
-        # Use a temporary table for efficient bulk duplicate checking
+        if not external_id:
+            return None
         try:
-            # Create temp table
             cur.execute("""
-                CREATE TEMP TABLE temp_transaction_check (
-                    check_date DATE,
-                    check_amount DECIMAL,
-                    check_description TEXT
-                ) ON COMMIT DROP
-            """)
-            
-            # Insert keys to check
-            cur.executemany("""
-                INSERT INTO temp_transaction_check (check_date, check_amount, check_description)
-                VALUES (%s, %s, %s)
-            """, transaction_keys)
-            
-            # Find existing duplicates
+                SELECT id, date, description, amount, bank_import_batch_id
+                FROM pharma.bank_transactions
+                WHERE bank_account_id = %s
+                  AND external_id = %s
+                LIMIT 1
+            """, (self.bank_account_id, external_id))
+            result = cur.fetchone()
+            return dict(result) if result else None
+        except Exception:
+            return None
+    
+    def _check_exact_duplicate(self, cur, row: ParsedRow) -> Optional[dict]:
+        """
+        Check for exact duplicate: same date + amount + description.
+        Returns existing transaction info if found, None otherwise.
+        """
+        try:
             cur.execute("""
-                SELECT DISTINCT t.date, t.amount, t.description
-                FROM pharma.bank_transactions t
-                INNER JOIN temp_transaction_check tmp
-                ON t.date = tmp.check_date
-                AND t.amount = tmp.check_amount
-                AND t.description = tmp.check_description
-                WHERE t.bank_account_id = %s
-            """, (self.bank_account_id,))
-            
-            existing = {(row['date'], row['amount'], row['description']) for row in cur.fetchall()}
-            return existing
-            
-        except Exception as e:
-            # If bulk check fails, fall back to individual checks
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Bulk duplicate check failed, using individual checks: {str(e)}")
-            
-            existing = set()
-            for date_val, amount_val, desc_val in transaction_keys:
-                try:
-                    cur.execute("""
-                        SELECT COUNT(*) as count
-                        FROM pharma.bank_transactions
-                        WHERE bank_account_id = %s
-                          AND date = %s
-                          AND amount = %s
-                          AND description = %s
-                    """, (self.bank_account_id, date_val, amount_val, desc_val))
-                    result = cur.fetchone()
-                    if result and result['count'] > 0:
-                        existing.add((date_val, amount_val, desc_val))
-                except Exception:
-                    continue
-            
-            return existing
+                SELECT id, date, description, amount, bank_import_batch_id
+                FROM pharma.bank_transactions
+                WHERE bank_account_id = %s
+                  AND date = %s
+                  AND amount = %s
+                  AND description = %s
+                LIMIT 1
+            """, (
+                self.bank_account_id,
+                row.date,
+                float(row.amount),
+                row.description
+            ))
+            result = cur.fetchone()
+            return dict(result) if result else None
+        except Exception:
+            return None
+    
+    def _check_similar_duplicate(self, cur, row: ParsedRow) -> Optional[dict]:
+        """
+        Check for similar duplicate: same date + amount (less strict).
+        This catches cases where description might vary slightly.
+        Returns existing transaction info if found, None otherwise.
+        """
+        try:
+            cur.execute("""
+                SELECT id, date, description, amount, bank_import_batch_id
+                FROM pharma.bank_transactions
+                WHERE bank_account_id = %s
+                  AND date = %s
+                  AND amount = %s
+                LIMIT 1
+            """, (
+                self.bank_account_id,
+                row.date,
+                float(row.amount)
+            ))
+            result = cur.fetchone()
+            return dict(result) if result else None
+        except Exception:
+            return None
     
     def _build_external_id(self, row: ParsedRow) -> Optional[str]:
         """

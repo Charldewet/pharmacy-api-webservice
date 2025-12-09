@@ -722,3 +722,5 @@ function useDebtors(pharmacyId: number, filters: DebtorFilters) {
 
 For questions or issues, contact the backend team or refer to the main API documentation.
 
+
+

@@ -13,7 +13,7 @@ from decimal import Decimal
 from ..db import get_conn
 from ..schemas import (
     ImportPreviewResponse, ImportSummary, ParsedTransaction, ImportError,
-    ImportConfirmRequest, ImportConfirmResponse, BankImportBatch
+    ImportConfirmRequest, ImportConfirmResponse, BankImportBatch, SuspectedDuplicate
 )
 from ..auth import require_api_key
 from ..services.bank_csv_parser import BankCsvParser, ParsedRow, ParseError
@@ -111,6 +111,42 @@ async def preview_bank_import(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error parsing CSV: {str(e)}")
     
+    # Check for suspected duplicates (without importing)
+    suspected_duplicates_list = []
+    try:
+        with get_conn() as check_conn:
+            with check_conn.cursor() as check_cur:
+                # Check first 100 rows for suspected duplicates (for preview)
+                preview_rows = parse_result.rows[:100]  # Check first 100 for preview
+                for row in preview_rows:
+                    # Check for similar matches (date + amount)
+                    check_cur.execute("""
+                        SELECT id, date, description, amount
+                        FROM pharma.bank_transactions
+                        WHERE bank_account_id = %s
+                          AND date = %s
+                          AND amount = %s
+                        LIMIT 1
+                    """, (bank_account_id, row.date, float(row.amount)))
+                    match = check_cur.fetchone()
+                    if match:
+                        suspected_duplicates_list.append(SuspectedDuplicate(
+                            row_number=row.row_number,
+                            date=row.date.isoformat() if hasattr(row.date, 'isoformat') else str(row.date),
+                            description=row.description,
+                            amount=float(row.amount),
+                            reference=row.reference,
+                            match_reason=f"Similar match: Same date ({row.date}) and amount ({row.amount})",
+                            existing_transaction_id=match.get('id'),
+                            existing_date=match['date'].isoformat() if hasattr(match['date'], 'isoformat') else str(match['date']),
+                            existing_description=match.get('description')
+                        ))
+    except Exception as e:
+        # If duplicate check fails, continue without suspected duplicates
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to check for suspected duplicates in preview: {str(e)}")
+    
     # Convert summary
     summary = _convert_summary_to_schema(parse_result.summary)
     
@@ -131,6 +167,7 @@ async def preview_bank_import(
         bank_account_id=bank_account_id,
         summary=summary,
         sample_transactions=sample_transactions,
+        suspected_duplicates=suspected_duplicates_list,
         errors=errors
     )
 
@@ -231,6 +268,22 @@ async def confirm_bank_import(
                 for error in import_result.errors
             ]
             
+            # Convert suspected duplicates to schema format
+            suspected_duplicates_list = [
+                SuspectedDuplicate(
+                    row_number=dup.row_number,
+                    date=dup.date.isoformat() if hasattr(dup.date, 'isoformat') else str(dup.date),
+                    description=dup.description,
+                    amount=float(dup.amount),
+                    reference=dup.reference,
+                    match_reason=dup.match_reason,
+                    existing_transaction_id=dup.existing_transaction_id,
+                    existing_date=dup.existing_date.isoformat() if dup.existing_date and hasattr(dup.existing_date, 'isoformat') else (str(dup.existing_date) if dup.existing_date else None),
+                    existing_description=dup.existing_description
+                )
+                for dup in import_result.suspected_duplicates
+            ]
+            
             # Get period dates from summary
             period_start = import_result.summary.get('min_date')
             period_end = import_result.summary.get('max_date')
@@ -239,6 +292,7 @@ async def confirm_bank_import(
                 bank_import_batch_id=import_result.bank_import_batch_id,
                 transactions_inserted=import_result.transactions_inserted,
                 transactions_skipped_as_duplicates=import_result.transactions_skipped_as_duplicates,
+                suspected_duplicates=suspected_duplicates_list,
                 errors_count=len(import_result.errors),
                 period_start=period_start,
                 period_end=period_end,

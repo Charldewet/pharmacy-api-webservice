@@ -153,3 +153,5 @@ def migrate_targets_table():
 if __name__ == "__main__":
     migrate_targets_table()
 
+
+
