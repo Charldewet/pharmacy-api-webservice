@@ -70,6 +70,10 @@ class BankStatementImporter:
     
     def _import(self) -> ImportResult:
         """Main import logic"""
+        import logging
+        import json
+        logger = logging.getLogger(__name__)
+        
         # Parse CSV
         parse_result = BankCsvParser.parse(self.file_content)
         
@@ -79,20 +83,91 @@ class BankStatementImporter:
             
             inserted = 0
             skipped = 0
+            insert_errors = []
             
-            # Process each row
+            # Batch duplicate detection for better performance
+            if self.skip_duplicates and parse_result.rows:
+                # Collect all transaction keys to check
+                transaction_keys = [
+                    (row.date, float(row.amount), row.description)
+                    for row in parse_result.rows
+                ]
+                
+                # Bulk check for duplicates
+                existing_keys = self._bulk_check_duplicates(cur, transaction_keys)
+                logger.info(f"Duplicate check: {len(existing_keys)} duplicates found out of {len(transaction_keys)} transactions")
+            else:
+                existing_keys = set()
+            
+            # Prepare transactions for batch insert
+            transactions_to_insert = []
             for row in parse_result.rows:
-                if self.skip_duplicates and self._is_duplicate_transaction(cur, row):
+                key = (row.date, float(row.amount), row.description)
+                
+                if self.skip_duplicates and key in existing_keys:
                     skipped += 1
                     continue
                 
-                try:
-                    self._create_bank_transaction(cur, batch_id, row)
-                    inserted += 1
-                except Exception as e:
-                    # If insert fails, skip and continue
-                    skipped += 1
-                    continue
+                # Add to insert list
+                
+                # Prepare transaction data
+                external_id = self._build_external_id(row)
+                amount_value = float(row.amount) if row.amount is not None else None
+                balance_value = float(row.balance) if row.balance is not None else None
+                raw_data_json = json.dumps(row.raw_data) if row.raw_data else None
+                description = row.description or ""
+                raw_description = row.raw_description or description
+                
+                transactions_to_insert.append((
+                    batch_id,
+                    self.bank_account_id,
+                    self.pharmacy_id,
+                    row.date,
+                    description,
+                    raw_description,
+                    row.reference,
+                    amount_value,
+                    balance_value,
+                    raw_data_json,
+                    external_id
+                ))
+            
+            # Batch insert transactions
+            logger.info(f"Prepared {len(transactions_to_insert)} transactions for insertion (skipped {skipped} duplicates)")
+            
+            if transactions_to_insert:
+                BATCH_SIZE = 500
+                for i in range(0, len(transactions_to_insert), BATCH_SIZE):
+                    chunk = transactions_to_insert[i:i + BATCH_SIZE]
+                    try:
+                        cur.executemany("""
+                            INSERT INTO pharma.bank_transactions
+                            (bank_import_batch_id, bank_account_id, pharmacy_id, date, description,
+                             raw_description, reference, amount, balance, raw_data, external_id)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """, chunk)
+                        inserted += len(chunk)
+                        logger.info(f"Successfully inserted batch of {len(chunk)} transactions (total inserted: {inserted})")
+                    except Exception as e:
+                        # If batch insert fails, try individual inserts
+                        logger.error(f"Batch insert failed for chunk {i//BATCH_SIZE + 1}: {str(e)}")
+                        logger.warning(f"Falling back to individual inserts for this chunk")
+                        for data in chunk:
+                            try:
+                                cur.execute("""
+                                    INSERT INTO pharma.bank_transactions
+                                    (bank_import_batch_id, bank_account_id, pharmacy_id, date, description,
+                                     raw_description, reference, amount, balance, raw_data, external_id)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                """, data)
+                                inserted += 1
+                            except Exception as insert_error:
+                                logger.error(f"Failed to insert transaction: {str(insert_error)}")
+                                skipped += 1
+                                insert_errors.append(str(insert_error))
+                                continue
+            else:
+                logger.warning(f"No transactions to insert! All {len(parse_result.rows)} transactions were skipped as duplicates or had errors.")
             
             # Insert parsing errors into bank_import_errors table
             import json
@@ -163,6 +238,15 @@ class BankStatementImporter:
         
         external_id = self._build_external_id(row)
         
+        # Ensure all values are properly formatted
+        amount_value = float(row.amount) if row.amount is not None else None
+        balance_value = float(row.balance) if row.balance is not None else None
+        raw_data_json = json.dumps(row.raw_data) if row.raw_data else None
+        
+        # Ensure description is not None
+        description = row.description or ""
+        raw_description = row.raw_description or description
+        
         cur.execute("""
             INSERT INTO pharma.bank_transactions
             (bank_import_batch_id, bank_account_id, pharmacy_id, date, description,
@@ -173,36 +257,78 @@ class BankStatementImporter:
             self.bank_account_id,
             self.pharmacy_id,
             row.date,
-            row.description,
-            row.raw_description,
+            description,
+            raw_description,
             row.reference,
-            float(row.amount),
-            float(row.balance) if row.balance is not None else None,
-            json.dumps(row.raw_data) if row.raw_data else None,
+            amount_value,
+            balance_value,
+            raw_data_json,
             external_id
         ))
     
-    def _is_duplicate_transaction(self, cur, row: ParsedRow) -> bool:
+    def _bulk_check_duplicates(self, cur, transaction_keys: list) -> set:
         """
-        Check if transaction is duplicate.
-        Uses same date + amount + description on same bank account.
+        Bulk check for duplicate transactions.
+        Returns a set of (date, amount, description) tuples that already exist.
         """
-        cur.execute("""
-            SELECT COUNT(*) as count
-            FROM pharma.bank_transactions
-            WHERE bank_account_id = %s
-              AND date = %s
-              AND amount = %s
-              AND description = %s
-        """, (
-            self.bank_account_id,
-            row.date,
-            float(row.amount),
-            row.description
-        ))
+        if not transaction_keys:
+            return set()
         
-        result = cur.fetchone()
-        return result['count'] > 0
+        # Use a temporary table for efficient bulk duplicate checking
+        try:
+            # Create temp table
+            cur.execute("""
+                CREATE TEMP TABLE temp_transaction_check (
+                    check_date DATE,
+                    check_amount DECIMAL,
+                    check_description TEXT
+                ) ON COMMIT DROP
+            """)
+            
+            # Insert keys to check
+            cur.executemany("""
+                INSERT INTO temp_transaction_check (check_date, check_amount, check_description)
+                VALUES (%s, %s, %s)
+            """, transaction_keys)
+            
+            # Find existing duplicates
+            cur.execute("""
+                SELECT DISTINCT t.date, t.amount, t.description
+                FROM pharma.bank_transactions t
+                INNER JOIN temp_transaction_check tmp
+                ON t.date = tmp.check_date
+                AND t.amount = tmp.check_amount
+                AND t.description = tmp.check_description
+                WHERE t.bank_account_id = %s
+            """, (self.bank_account_id,))
+            
+            existing = {(row['date'], row['amount'], row['description']) for row in cur.fetchall()}
+            return existing
+            
+        except Exception as e:
+            # If bulk check fails, fall back to individual checks
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Bulk duplicate check failed, using individual checks: {str(e)}")
+            
+            existing = set()
+            for date_val, amount_val, desc_val in transaction_keys:
+                try:
+                    cur.execute("""
+                        SELECT COUNT(*) as count
+                        FROM pharma.bank_transactions
+                        WHERE bank_account_id = %s
+                          AND date = %s
+                          AND amount = %s
+                          AND description = %s
+                    """, (self.bank_account_id, date_val, amount_val, desc_val))
+                    result = cur.fetchone()
+                    if result and result['count'] > 0:
+                        existing.add((date_val, amount_val, desc_val))
+                except Exception:
+                    continue
+            
+            return existing
     
     def _build_external_id(self, row: ParsedRow) -> Optional[str]:
         """
