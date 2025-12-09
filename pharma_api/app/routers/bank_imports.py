@@ -13,7 +13,7 @@ from decimal import Decimal
 from ..db import get_conn
 from ..schemas import (
     ImportPreviewResponse, ImportSummary, ParsedTransaction, ImportError,
-    ImportConfirmRequest, ImportConfirmResponse, BankImportBatch, SuspectedDuplicate
+    ImportConfirmRequest, ImportConfirmResponse, BankImportBatch, BankImportBatchWithDetails, SuspectedDuplicate
 )
 from ..auth import require_api_key
 from ..services.bank_csv_parser import BankCsvParser, ParsedRow, ParseError
@@ -334,23 +334,67 @@ def get_import_batch(batch_id: int):
         return batch
 
 
-@router.get("/pharmacies/{pharmacy_id}/batches", dependencies=[Depends(require_api_key)])
+@router.get("/pharmacies/{pharmacy_id}/batches", response_model=List[BankImportBatchWithDetails], dependencies=[Depends(require_api_key)])
 def list_import_batches(pharmacy_id: int, limit: int = 50, offset: int = 0):
-    """List import batches for a pharmacy"""
+    """
+    List import batches for a pharmacy with transaction counts and bank account details.
+    
+    Returns batches with:
+    - All batch information (id, dates, file_name, status, etc.)
+    - Transaction count per batch
+    - Bank account name and bank name
+    """
     with get_conn() as conn, conn.cursor() as cur:
         # Verify pharmacy exists
         cur.execute("SELECT pharmacy_id FROM pharma.pharmacies WHERE pharmacy_id = %s", (pharmacy_id,))
         if not cur.fetchone():
             raise HTTPException(status_code=404, detail="Pharmacy not found")
         
+        # Query batches with transaction counts and bank account details
         cur.execute("""
-            SELECT id, bank_account_id, pharmacy_id, period_start, period_end,
-                   file_name, uploaded_by_user_id, uploaded_at, status, notes
-            FROM pharma.bank_import_batches
-            WHERE pharmacy_id = %s
-            ORDER BY uploaded_at DESC
+            SELECT 
+                bib.id,
+                bib.bank_account_id,
+                bib.pharmacy_id,
+                bib.period_start,
+                bib.period_end,
+                bib.file_name,
+                bib.uploaded_by_user_id,
+                bib.uploaded_at,
+                bib.status,
+                bib.notes,
+                COALESCE(COUNT(bt.id), 0) as transaction_count,
+                ba.name as bank_account_name,
+                ba.bank_name
+            FROM pharma.bank_import_batches bib
+            LEFT JOIN pharma.bank_transactions bt ON bt.bank_import_batch_id = bib.id
+            LEFT JOIN pharma.bank_accounts ba ON bib.bank_account_id = ba.id
+            WHERE bib.pharmacy_id = %s
+            GROUP BY bib.id, ba.name, ba.bank_name
+            ORDER BY bib.uploaded_at DESC
             LIMIT %s OFFSET %s
         """, (pharmacy_id, limit, offset))
         
-        return cur.fetchall()
+        batches = cur.fetchall()
+        
+        # Convert to response model
+        result = []
+        for batch in batches:
+            result.append(BankImportBatchWithDetails(
+                id=batch['id'],
+                bank_account_id=batch['bank_account_id'],
+                pharmacy_id=batch['pharmacy_id'],
+                period_start=batch['period_start'],
+                period_end=batch['period_end'],
+                file_name=batch['file_name'],
+                uploaded_by_user_id=batch['uploaded_by_user_id'],
+                uploaded_at=batch['uploaded_at'],
+                status=batch['status'],
+                notes=batch['notes'],
+                transaction_count=batch['transaction_count'],
+                bank_account_name=batch['bank_account_name'],
+                bank_name=batch['bank_name']
+            ))
+        
+        return result
 

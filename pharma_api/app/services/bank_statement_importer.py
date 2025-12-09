@@ -104,16 +104,18 @@ class BankStatementImporter:
             suspected_duplicates = []
             exact_duplicates = set()
             
+            # Preload potential duplicates in bulk to avoid per-row queries
+            existing_by_external, existing_by_exact, existing_by_similar = self._load_existing_transactions(cur, parse_result.rows)
+            
             if self.skip_duplicates and parse_result.rows:
-                # Check for duplicates - be less strict
-                # Only skip if we have a very high confidence match (external_id or exact match)
                 for row in parse_result.rows:
                     external_id = self._build_external_id(row)
+                    exact_key = (row.date, row.amount, row.description)
+                    similar_key = (row.date, row.amount)
                     
-                    # Check for duplicate by external_id first (highest confidence)
-                    external_id_match = self._check_external_id_duplicate(cur, external_id)
-                    if external_id_match:
-                        exact_duplicates.add((row.date, float(row.amount), row.description))
+                    external_match = existing_by_external.get(external_id)
+                    if external_match:
+                        exact_duplicates.add((row.date, row.amount, row.description))
                         skipped += 1
                         suspected_duplicates.append(SuspectedDuplicate(
                             row_number=row.row_number,
@@ -122,21 +124,17 @@ class BankStatementImporter:
                             amount=row.amount,
                             reference=row.reference,
                             match_reason="High confidence: Same external_id (deterministic hash)",
-                            existing_transaction_id=external_id_match.get('id'),
-                            existing_date=external_id_match.get('date'),
-                            existing_description=external_id_match.get('description')
+                            existing_transaction_id=external_match.get('id'),
+                            existing_date=external_match.get('date'),
+                            existing_description=external_match.get('description')
                         ))
                         continue
                     
-                    # Check for exact duplicate (date + amount + description) - medium confidence
-                    # Only skip if it's from a different import batch (not same file re-imported)
-                    exact_match = self._check_exact_duplicate(cur, row)
+                    exact_match = existing_by_exact.get(exact_key)
                     if exact_match:
                         existing_batch_id = exact_match.get('bank_import_batch_id')
-                        # Skip if it exists and is from a different batch (avoid re-importing same file)
-                        # But be lenient - only skip if we're very confident it's a duplicate
                         if existing_batch_id:
-                            exact_duplicates.add((row.date, float(row.amount), row.description))
+                            exact_duplicates.add((row.date, row.amount, row.description))
                             skipped += 1
                             suspected_duplicates.append(SuspectedDuplicate(
                                 row_number=row.row_number,
@@ -151,10 +149,8 @@ class BankStatementImporter:
                             ))
                             continue
                     
-                    # Check for similar match (date + amount only) - low confidence, don't skip
-                    similar_match = self._check_similar_duplicate(cur, row)
+                    similar_match = existing_by_similar.get(similar_key)
                     if similar_match:
-                        # Flag as suspected but don't skip - let user decide
                         suspected_duplicates.append(SuspectedDuplicate(
                             row_number=row.row_number,
                             date=row.date,
@@ -167,7 +163,7 @@ class BankStatementImporter:
                             existing_description=similar_match.get('description')
                         ))
                 
-                logger.info(f"Duplicate check: {len(exact_duplicates)} exact duplicates skipped, {len(suspected_duplicates)} suspected duplicates found")
+                logger.info(f"Duplicate check (bulk): {len(exact_duplicates)} exact duplicates skipped, {len(suspected_duplicates)} suspected duplicates found")
             
             # Create import batch AFTER duplicate check (so we know how many will be inserted)
             batch_id = self._create_import_batch(cur, parse_result.summary)
@@ -175,7 +171,7 @@ class BankStatementImporter:
             # Prepare transactions for batch insert
             transactions_to_insert = []
             for row in parse_result.rows:
-                key = (row.date, float(row.amount), row.description)
+                key = (row.date, row.amount, row.description)
                 
                 # Only skip high-confidence duplicates
                 if self.skip_duplicates and key in exact_duplicates:
@@ -218,9 +214,12 @@ class BankStatementImporter:
                             (bank_import_batch_id, bank_account_id, pharmacy_id, date, description,
                              raw_description, reference, amount, balance, raw_data, external_id)
                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (bank_account_id, external_id) DO NOTHING
                         """, chunk)
-                        inserted += len(chunk)
-                        logger.info(f"Successfully inserted batch of {len(chunk)} transactions (total inserted: {inserted})")
+                        inserted_in_chunk = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+                        inserted += inserted_in_chunk
+                        skipped += len(chunk) - inserted_in_chunk
+                        logger.info(f"Inserted {inserted_in_chunk} / {len(chunk)} transactions in chunk (total inserted: {inserted})")
                     except Exception as e:
                         # If batch insert fails, try individual inserts
                         logger.error(f"Batch insert failed for chunk {i//BATCH_SIZE + 1}: {str(e)}")
@@ -232,8 +231,12 @@ class BankStatementImporter:
                                     (bank_import_batch_id, bank_account_id, pharmacy_id, date, description,
                                      raw_description, reference, amount, balance, raw_data, external_id)
                                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                    ON CONFLICT (bank_account_id, external_id) DO NOTHING
                                 """, data)
-                                inserted += 1
+                                if cur.rowcount and cur.rowcount > 0:
+                                    inserted += 1
+                                else:
+                                    skipped += 1
                             except Exception as insert_error:
                                 logger.error(f"Failed to insert transaction: {str(insert_error)}")
                                 skipped += 1
@@ -418,3 +421,103 @@ class BankStatementImporter:
         hash_input = f"{self.bank_account_id}|{row.date}|{row.amount}|{row.description}"
         return hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
 
+    def _load_existing_transactions(self, cur, rows: List[ParsedRow]):
+        """
+        Bulk-load potential duplicates to avoid per-row queries.
+        Returns three dictionaries keyed by:
+        - external_id
+        - (date, amount, description)
+        - (date, amount)
+        """
+        existing_by_external = {}
+        existing_by_exact = {}
+        existing_by_similar = {}
+
+        if not rows:
+            return existing_by_external, existing_by_exact, existing_by_similar
+
+        # Collect unique keys to keep payload small
+        external_ids = []
+        exact_keys = []
+        similar_keys = []
+
+        for row in rows:
+            external_id = self._build_external_id(row)
+            if external_id:
+                external_ids.append(external_id)
+            exact_keys.append((row.date, row.amount, row.description))
+            similar_keys.append((row.date, row.amount))
+
+        # Deduplicate while preserving order for array zip
+        def _unique(seq):
+            seen = set()
+            out = []
+            for item in seq:
+                if item in seen:
+                    continue
+                seen.add(item)
+                out.append(item)
+            return out
+
+        external_ids = _unique(external_ids)
+        exact_keys = _unique(exact_keys)
+        similar_keys = _unique(similar_keys)
+
+        CHUNK = 1000
+
+        # External ID lookup
+        for i in range(0, len(external_ids), CHUNK):
+            chunk = external_ids[i:i + CHUNK]
+            cur.execute("""
+                SELECT id, date, description, amount, bank_import_batch_id, external_id
+                FROM pharma.bank_transactions
+                WHERE bank_account_id = %s
+                  AND external_id = ANY(%s)
+            """, (self.bank_account_id, chunk))
+            for row in cur.fetchall():
+                existing_by_external[row['external_id']] = row
+
+        # Exact match lookup (date, amount, description)
+        for i in range(0, len(exact_keys), CHUNK):
+            chunk = exact_keys[i:i + CHUNK]
+            dates = [k[0] for k in chunk]
+            amounts = [k[1] for k in chunk]
+            descriptions = [k[2] for k in chunk]
+            cur.execute("""
+                WITH data(date, amount, description) AS (
+                    SELECT * FROM unnest(%s::date[], %s::numeric[], %s::text[])
+                )
+                SELECT t.id, t.date, t.description, t.amount, t.bank_import_batch_id
+                FROM data d
+                JOIN pharma.bank_transactions t
+                  ON t.bank_account_id = %s
+                 AND t.date = d.date
+                 AND t.amount = d.amount
+                 AND t.description = d.description
+            """, (dates, amounts, descriptions, self.bank_account_id))
+            for row in cur.fetchall():
+                key = (row['date'], Decimal(str(row['amount'])), row['description'])
+                existing_by_exact[key] = row
+
+        # Similar match lookup (date, amount)
+        for i in range(0, len(similar_keys), CHUNK):
+            chunk = similar_keys[i:i + CHUNK]
+            dates = [k[0] for k in chunk]
+            amounts = [k[1] for k in chunk]
+            cur.execute("""
+                WITH data(date, amount) AS (
+                    SELECT * FROM unnest(%s::date[], %s::numeric[])
+                )
+                SELECT DISTINCT ON (t.date, t.amount)
+                       t.id, t.date, t.description, t.amount, t.bank_import_batch_id
+                FROM data d
+                JOIN pharma.bank_transactions t
+                  ON t.bank_account_id = %s
+                 AND t.date = d.date
+                 AND t.amount = d.amount
+            """, (dates, amounts, self.bank_account_id))
+            for row in cur.fetchall():
+                key = (row['date'], Decimal(str(row['amount'])))
+                existing_by_similar[key] = row
+
+        return existing_by_external, existing_by_exact, existing_by_similar

@@ -255,6 +255,12 @@ class BankImportBatch(BaseModel):
     status: str  # IMPORTED, CLASSIFIED_PARTIAL, CLASSIFIED_COMPLETE, POSTED_TO_LEDGER
     notes: Optional[str] = None
 
+class BankImportBatchWithDetails(BankImportBatch):
+    """Enhanced BankImportBatch with transaction count and bank account details"""
+    transaction_count: int = 0
+    bank_account_name: Optional[str] = None
+    bank_name: Optional[str] = None
+
 class BankTransaction(BaseModel):
     id: int
     bank_import_batch_id: int
