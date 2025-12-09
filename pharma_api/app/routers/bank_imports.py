@@ -443,13 +443,15 @@ async def confirm_bank_import(
             
             conn.commit()
             
+            # period_start and period_end are already strings (YYYY-MM-DD format from parser)
+            # No need to call isoformat() on them
             return ImportConfirmResponse(
                 bank_import_batch_id=batch_id,
                 transactions_inserted=transactions_inserted,
                 transactions_skipped_as_duplicates=transactions_skipped,
                 errors_count=errors_count,
-                period_start=period_start.isoformat() if period_start else None,
-                period_end=period_end.isoformat() if period_end else None,
+                period_start=period_start if period_start else None,
+                period_end=period_end if period_end else None,
                 status="IMPORTED"
             )
     except HTTPException:
