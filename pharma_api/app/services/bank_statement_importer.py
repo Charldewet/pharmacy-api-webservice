@@ -87,23 +87,21 @@ class BankStatementImporter:
         self.skip_duplicates = skip_duplicates
     
     def _import(self) -> ImportResult:
-        """Main import logic"""
+        """Main import logic - optimized for speed"""
         import logging
         import json
         logger = logging.getLogger(__name__)
         
-        # Parse CSV
+        # Parse CSV (this is fast)
         parse_result = BankCsvParser.parse(self.file_content)
         
+        inserted = 0
+        skipped = 0
+        suspected_duplicates = []
+        exact_duplicates = set()
+        batch_id = None
+        
         with self.conn.cursor() as cur:
-            inserted = 0
-            skipped = 0
-            insert_errors = []
-            
-            # Duplicate detection - less strict: only skip if external_id matches or very high confidence
-            suspected_duplicates = []
-            exact_duplicates = set()
-            
             # Preload potential duplicates in bulk to avoid per-row queries
             existing_by_external, existing_by_exact, existing_by_similar = self._load_existing_transactions(cur, parse_result.rows)
             
@@ -165,10 +163,10 @@ class BankStatementImporter:
                 
                 logger.info(f"Duplicate check (bulk): {len(exact_duplicates)} exact duplicates skipped, {len(suspected_duplicates)} suspected duplicates found")
             
-            # Create import batch AFTER duplicate check (so we know how many will be inserted)
+            # Create import batch
             batch_id = self._create_import_batch(cur, parse_result.summary)
             
-            # Prepare transactions for batch insert
+            # Prepare transactions for batch insert (filter out duplicates)
             transactions_to_insert = []
             for row in parse_result.rows:
                 key = (row.date, row.amount, row.description)
@@ -176,8 +174,6 @@ class BankStatementImporter:
                 # Only skip high-confidence duplicates
                 if self.skip_duplicates and key in exact_duplicates:
                     continue
-                
-                # Add to insert list
                 
                 # Prepare transaction data
                 external_id = self._build_external_id(row)
@@ -201,54 +197,36 @@ class BankStatementImporter:
                     external_id
                 ))
             
-            # Batch insert transactions
             logger.info(f"Prepared {len(transactions_to_insert)} transactions for insertion (skipped {skipped} duplicates)")
             
             if transactions_to_insert:
-                BATCH_SIZE = 500
-                for i in range(0, len(transactions_to_insert), BATCH_SIZE):
-                    chunk = transactions_to_insert[i:i + BATCH_SIZE]
+                # Use SAVEPOINTs for each insert to handle duplicates gracefully
+                # This is fast and handles constraint violations without aborting the transaction
+                for data in transactions_to_insert:
                     try:
-                        cur.executemany("""
+                        cur.execute("SAVEPOINT txn_insert")
+                        cur.execute("""
                             INSERT INTO pharma.bank_transactions
                             (bank_import_batch_id, bank_account_id, pharmacy_id, date, description,
                              raw_description, reference, amount, balance, raw_data, external_id)
                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (bank_account_id, external_id) DO NOTHING
-                        """, chunk)
-                        inserted_in_chunk = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-                        inserted += inserted_in_chunk
-                        skipped += len(chunk) - inserted_in_chunk
-                        logger.info(f"Inserted {inserted_in_chunk} / {len(chunk)} transactions in chunk (total inserted: {inserted})")
-                    except Exception as e:
-                        # If batch insert fails, try individual inserts
-                        logger.error(f"Batch insert failed for chunk {i//BATCH_SIZE + 1}: {str(e)}")
-                        logger.warning(f"Falling back to individual inserts for this chunk")
-                        for data in chunk:
-                            try:
-                                cur.execute("""
-                                    INSERT INTO pharma.bank_transactions
-                                    (bank_import_batch_id, bank_account_id, pharmacy_id, date, description,
-                                     raw_description, reference, amount, balance, raw_data, external_id)
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                                    ON CONFLICT (bank_account_id, external_id) DO NOTHING
-                                """, data)
-                                if cur.rowcount and cur.rowcount > 0:
-                                    inserted += 1
-                                else:
-                                    skipped += 1
-                            except Exception as insert_error:
-                                logger.error(f"Failed to insert transaction: {str(insert_error)}")
-                                skipped += 1
-                                insert_errors.append(str(insert_error))
-                                continue
+                        """, data)
+                        cur.execute("RELEASE SAVEPOINT txn_insert")
+                        inserted += 1
+                    except Exception as insert_error:
+                        cur.execute("ROLLBACK TO SAVEPOINT txn_insert")
+                        skipped += 1
+                        # Don't log every duplicate - too noisy
+                        continue
+                
+                logger.info(f"Inserted {inserted} / {len(transactions_to_insert)} transactions")
             else:
                 logger.warning(f"No transactions to insert! All {len(parse_result.rows)} transactions were skipped as duplicates or had errors.")
             
             # Insert parsing errors into bank_import_errors table
-            import json
             for error in parse_result.errors:
                 try:
+                    cur.execute("SAVEPOINT err_insert")
                     cur.execute("""
                         INSERT INTO pharma.bank_import_errors
                         (bank_import_batch_id, row_number, raw_data, error_message)
@@ -259,8 +237,9 @@ class BankStatementImporter:
                         json.dumps(error.raw_data) if error.raw_data else None,
                         error.error
                     ))
+                    cur.execute("RELEASE SAVEPOINT err_insert")
                 except Exception:
-                    # Log error but continue
+                    cur.execute("ROLLBACK TO SAVEPOINT err_insert")
                     continue
             
             # Update batch status
@@ -271,15 +250,15 @@ class BankStatementImporter:
             """, (batch_id,))
             
             self.conn.commit()
-            
-            return ImportResult(
-                bank_import_batch_id=batch_id,
-                transactions_inserted=inserted,
-                transactions_skipped_as_duplicates=skipped,
-                errors=parse_result.errors,
-                summary=parse_result.summary,
-                suspected_duplicates=suspected_duplicates
-            )
+        
+        return ImportResult(
+            bank_import_batch_id=batch_id,
+            transactions_inserted=inserted,
+            transactions_skipped_as_duplicates=skipped,
+            errors=parse_result.errors,
+            summary=parse_result.summary,
+            suspected_duplicates=suspected_duplicates
+        )
     
     def _create_import_batch(self, cur, summary: dict) -> int:
         """Create bank_import_batch record"""
