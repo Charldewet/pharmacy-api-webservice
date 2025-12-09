@@ -114,7 +114,7 @@ class BankCsvParser:
         summary = {
             "transaction_count": len(rows),
             "total_in": float(total_in),
-            "total_out": float(total_out),
+            "total_out": abs(float(total_out)),  # Return as positive number (absolute value)
             "min_date": min_date.isoformat() if min_date else None,
             "max_date": max_date.isoformat() if max_date else None
         }
