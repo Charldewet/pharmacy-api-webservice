@@ -53,7 +53,16 @@ def list_bank_rules(pharmacy_id: int):
                 
                 # Convert to dict format and parse allocate_json
                 rule_dict = dict(rule)
-                rule_dict['allocate'] = json.loads(rule_dict['allocate_json']) if rule_dict.get('allocate_json') else []
+                # allocate_json is already parsed by psycopg (JSONB), so use it directly
+                allocate_value = rule_dict.get('allocate_json')
+                if allocate_value is None:
+                    rule_dict['allocate'] = []
+                elif isinstance(allocate_value, (dict, list)):
+                    # Already parsed by psycopg
+                    rule_dict['allocate'] = allocate_value if isinstance(allocate_value, list) else [allocate_value]
+                else:
+                    # String that needs parsing
+                    rule_dict['allocate'] = json.loads(allocate_value)
                 del rule_dict['allocate_json']  # Remove JSON field, use allocate instead
                 rule_dict['conditions'] = [dict(c) for c in conditions]
                 result.append(rule_dict)
@@ -131,7 +140,16 @@ def create_bank_rule(pharmacy_id: int, rule: BankRuleCreate):
             conditions = cur.fetchall()
             
             rule_dict = dict(rule_result)
-            rule_dict['allocate'] = json.loads(rule_dict['allocate_json']) if rule_dict.get('allocate_json') else []
+            # allocate_json is already parsed by psycopg (JSONB), so use it directly
+            allocate_value = rule_dict.get('allocate_json')
+            if allocate_value is None:
+                rule_dict['allocate'] = []
+            elif isinstance(allocate_value, (dict, list)):
+                # Already parsed by psycopg
+                rule_dict['allocate'] = allocate_value if isinstance(allocate_value, list) else [allocate_value]
+            else:
+                # String that needs parsing
+                rule_dict['allocate'] = json.loads(allocate_value)
             del rule_dict['allocate_json']
             rule_dict['conditions'] = [dict(c) for c in conditions]
             
@@ -164,7 +182,16 @@ def get_bank_rule(rule_id: int):
             conditions = cur.fetchall()
             
             rule_dict = dict(rule)
-            rule_dict['allocate'] = json.loads(rule_dict['allocate_json']) if rule_dict.get('allocate_json') else []
+            # allocate_json is already parsed by psycopg (JSONB), so use it directly
+            allocate_value = rule_dict.get('allocate_json')
+            if allocate_value is None:
+                rule_dict['allocate'] = []
+            elif isinstance(allocate_value, (dict, list)):
+                # Already parsed by psycopg
+                rule_dict['allocate'] = allocate_value if isinstance(allocate_value, list) else [allocate_value]
+            else:
+                # String that needs parsing
+                rule_dict['allocate'] = json.loads(allocate_value)
             del rule_dict['allocate_json']
             rule_dict['conditions'] = [dict(c) for c in conditions]
             
