@@ -262,14 +262,29 @@ class FNBParser(BankParser):
             return abs(credit)  # Positive for credits
         
         # Try single amount field (case-insensitive)
-        amount_fields = ['Amount', 'Transaction Amount', 'Amount Debit', 'Amount Credit']
+        # When there's a single Amount field, preserve the sign as-is
+        # (CSV format already encodes: positive = credit, negative = debit)
+        amount_fields = ['Amount', 'Transaction Amount']
         for field in amount_fields:
             amount_str = self._find_field_case_insensitive(row, [field])
             if amount_str:
                 amount = self._parse_decimal(amount_str)
                 if amount is not None:
-                    # If amount is already negative, keep it; otherwise assume it's a debit
-                    return amount if amount < 0 else -abs(amount)
+                    # Preserve the sign - CSV already has correct encoding
+                    return amount
+        
+        # Try explicit debit/credit amount fields
+        debit_amount = self._find_field_case_insensitive(row, ['Amount Debit'])
+        credit_amount = self._find_field_case_insensitive(row, ['Amount Credit'])
+        
+        if debit_amount:
+            debit = self._parse_decimal(debit_amount)
+            if debit is not None:
+                return -abs(debit)
+        if credit_amount:
+            credit = self._parse_decimal(credit_amount)
+            if credit is not None:
+                return abs(credit)
         
         return None
     
@@ -359,13 +374,29 @@ class ABSAParser(BankParser):
             return abs(credit)
         
         # Try single amount field (case-insensitive)
-        amount_fields = ['Amount', 'Transaction Amount', 'Amount Debit', 'Amount Credit']
+        # When there's a single Amount field, preserve the sign as-is
+        # (CSV format already encodes: positive = credit, negative = debit)
+        amount_fields = ['Amount', 'Transaction Amount']
         for field in amount_fields:
             amount_str = self._find_field_case_insensitive(row, [field])
             if amount_str:
                 amount = self._parse_decimal(amount_str)
                 if amount is not None:
-                    return amount if amount < 0 else -abs(amount)
+                    # Preserve the sign - CSV already has correct encoding
+                    return amount
+        
+        # Try explicit debit/credit amount fields
+        debit_amount = self._find_field_case_insensitive(row, ['Amount Debit'])
+        credit_amount = self._find_field_case_insensitive(row, ['Amount Credit'])
+        
+        if debit_amount:
+            debit = self._parse_decimal(debit_amount)
+            if debit is not None:
+                return -abs(debit)
+        if credit_amount:
+            credit = self._parse_decimal(credit_amount)
+            if credit is not None:
+                return abs(credit)
         
         return None
     
@@ -451,13 +482,29 @@ class StandardBankParser(BankParser):
             return abs(credit)
         
         # Try single amount field (case-insensitive)
-        amount_fields = ['Amount', 'Transaction Amount', 'Amount Debit', 'Amount Credit']
+        # When there's a single Amount field, preserve the sign as-is
+        # (CSV format already encodes: positive = credit, negative = debit)
+        amount_fields = ['Amount', 'Transaction Amount']
         for field in amount_fields:
             amount_str = self._find_field_case_insensitive(row, [field])
             if amount_str:
                 amount = self._parse_decimal(amount_str)
                 if amount is not None:
-                    return amount if amount < 0 else -abs(amount)
+                    # Preserve the sign - CSV already has correct encoding
+                    return amount
+        
+        # Try explicit debit/credit amount fields
+        debit_amount = self._find_field_case_insensitive(row, ['Amount Debit'])
+        credit_amount = self._find_field_case_insensitive(row, ['Amount Credit'])
+        
+        if debit_amount:
+            debit = self._parse_decimal(debit_amount)
+            if debit is not None:
+                return -abs(debit)
+        if credit_amount:
+            credit = self._parse_decimal(credit_amount)
+            if credit is not None:
+                return abs(credit)
         
         return None
     
