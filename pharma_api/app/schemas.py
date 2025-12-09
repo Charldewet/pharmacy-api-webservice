@@ -396,3 +396,114 @@ class Account(AccountBase):
 
     class Config:
         from_attributes = True
+
+# ========== BANK RULES & CLASSIFICATION SCHEMAS ==========
+
+class BankRuleAllocation(BaseModel):
+    """Allocation for a bank rule - how to split the transaction"""
+    account_id: int
+    percent: float  # 0-100
+    vat_code: Optional[str] = "NO_VAT"  # VAT code if applicable
+
+class BankRuleConditionBase(BaseModel):
+    """Base condition for matching bank transactions"""
+    group_type: str  # 'ALL' or 'ANY'
+    field: str  # 'description', 'reference', 'amount', etc.
+    operator: str  # 'contains', 'equals', 'starts_with', etc.
+    value: str
+
+class BankRuleCondition(BankRuleConditionBase):
+    id: int
+    bank_rule_id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class BankRuleBase(BaseModel):
+    """Base bank rule schema"""
+    name: str
+    type: str  # 'receive', 'spend', 'transfer'
+    priority: int = 100
+    allocate: List[BankRuleAllocation]
+    contact_name: Optional[str] = None
+
+class BankRuleCreate(BankRuleBase):
+    """Create a new bank rule"""
+    pharmacy_id: int
+    conditions: List[BankRuleConditionBase]
+
+class BankRuleUpdate(BaseModel):
+    """Update an existing bank rule"""
+    name: Optional[str] = None
+    type: Optional[str] = None
+    priority: Optional[int] = None
+    allocate: Optional[List[BankRuleAllocation]] = None
+    contact_name: Optional[str] = None
+    is_active: Optional[bool] = None
+    conditions: Optional[List[BankRuleConditionBase]] = None
+
+class BankRule(BankRuleBase):
+    """Bank rule with full details"""
+    id: int
+    pharmacy_id: int
+    is_active: bool
+    created_by_user_id: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+    conditions: List[BankRuleCondition] = []
+
+    class Config:
+        from_attributes = True
+
+class AISuggestionBase(BaseModel):
+    """Base AI suggestion schema"""
+    suggested_account_id: int
+    suggested_description: Optional[str] = None
+    suggested_type: Optional[str] = None  # 'receive', 'spend', 'transfer'
+    confidence: Optional[float] = None  # 0-1
+
+class AISuggestion(AISuggestionBase):
+    """AI suggestion with full details"""
+    id: int
+    pharmacy_id: int
+    bank_transaction_id: int
+    model_name: Optional[str] = None
+    raw_response: Optional[dict] = None
+    status: str  # 'pending', 'accepted', 'rejected'
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class BankTransactionWithClassification(BankTransaction):
+    """Bank transaction with classification details"""
+    classification_status: str  # 'unclassified', 'rule_classified', 'ai_classified', 'user_override'
+    classified_at: Optional[datetime] = None
+    classified_by_rule_id: Optional[int] = None
+    ai_suggestion_id: Optional[int] = None
+    ledger_entry_id: Optional[int] = None
+    ai_suggestion: Optional[AISuggestion] = None
+
+    class Config:
+        from_attributes = True
+
+class ApplyRulesResponse(BaseModel):
+    """Response from applying rules to a statement"""
+    statement_id: int
+    total_lines: int
+    classified_by_rule: int
+    already_classified: int
+    unclassified: int
+
+class GenerateAISuggestionsResponse(BaseModel):
+    """Response from generating AI suggestions"""
+    statement_id: int
+    unclassified_before: int
+    suggestions_created: int
+
+class AcceptAISuggestionRequest(BaseModel):
+    """Request to accept an AI suggestion"""
+    account_id: Optional[int] = None  # Optional override of suggested account
