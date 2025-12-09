@@ -338,6 +338,8 @@ def generate_ai_suggestions_for_batch(batch_id: int):
 @router.get("/pharmacies/{pharmacy_id}/bank-transactions/unmatched", response_model=List[BankTransactionWithClassification])
 def list_unmatched_transactions(pharmacy_id: int):
     """List all unmatched/unclassified transactions for a pharmacy"""
+    from decimal import Decimal
+    
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -359,6 +361,24 @@ def list_unmatched_transactions(pharmacy_id: int):
             for txn in transactions:
                 txn_dict = dict(txn)
                 
+                # Convert Decimal to float for JSON serialization
+                if isinstance(txn_dict.get('amount'), Decimal):
+                    txn_dict['amount'] = float(txn_dict['amount'])
+                if isinstance(txn_dict.get('balance'), Decimal):
+                    txn_dict['balance'] = float(txn_dict['balance'])
+                
+                # Convert date to string
+                if txn_dict.get('date'):
+                    txn_dict['date'] = str(txn_dict['date'])
+                
+                # Convert datetime to ISO string
+                if txn_dict.get('created_at'):
+                    txn_dict['created_at'] = txn_dict['created_at'].isoformat()
+                if txn_dict.get('updated_at'):
+                    txn_dict['updated_at'] = txn_dict['updated_at'].isoformat()
+                if txn_dict.get('classified_at'):
+                    txn_dict['classified_at'] = txn_dict['classified_at'].isoformat()
+                
                 if txn['ai_suggestion_id']:
                     cur.execute("""
                         SELECT id, pharmacy_id, bank_transaction_id, suggested_account_id,
@@ -370,7 +390,16 @@ def list_unmatched_transactions(pharmacy_id: int):
                     
                     suggestion = cur.fetchone()
                     if suggestion:
-                        txn_dict['ai_suggestion'] = dict(suggestion)
+                        suggestion_dict = dict(suggestion)
+                        # Convert Decimal confidence to float
+                        if isinstance(suggestion_dict.get('confidence'), Decimal):
+                            suggestion_dict['confidence'] = float(suggestion_dict['confidence'])
+                        # Convert datetime to ISO string
+                        if suggestion_dict.get('created_at'):
+                            suggestion_dict['created_at'] = suggestion_dict['created_at'].isoformat()
+                        if suggestion_dict.get('updated_at'):
+                            suggestion_dict['updated_at'] = suggestion_dict['updated_at'].isoformat()
+                        txn_dict['ai_suggestion'] = suggestion_dict
                 
                 result.append(txn_dict)
             
