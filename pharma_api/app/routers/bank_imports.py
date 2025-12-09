@@ -190,7 +190,8 @@ async def confirm_bank_import(
     - **notes**: Optional notes about this import
     - **skip_duplicates**: Whether to skip duplicate transactions (default: true)
     """
-    with get_conn() as conn, conn.cursor() as cur:
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
         # Validate pharmacy exists
         cur.execute(
             "SELECT pharmacy_id FROM pharma.pharmacies WHERE pharmacy_id = %s AND is_active = true",
@@ -309,10 +310,10 @@ async def confirm_bank_import(
                         SELECT DISTINCT t.date, t.amount, t.description
                         FROM pharma.bank_transactions t
                         INNER JOIN temp_duplicate_check tmp
-                        ON t.bank_account_id = %s
-                        AND t.date = tmp.check_date
+                        ON t.date = tmp.check_date
                         AND t.amount = tmp.check_amount
                         AND t.description = tmp.check_description
+                        WHERE t.bank_account_id = %s
                     """, (bank_account_id,))
                     
                     existing_heuristic = {
@@ -375,6 +376,10 @@ async def confirm_bank_import(
                         result.raw_data.get('Narrative')
                     )
                 
+                # Convert Decimal to float for database insertion (PostgreSQL handles both, but float is safer)
+                amount_value = float(result.amount) if result.amount is not None else None
+                balance_value = float(result.balance) if result.balance is not None else None
+                
                 insert_data.append((
                     batch_id,
                     bank_account_id,
@@ -383,8 +388,8 @@ async def confirm_bank_import(
                     result.description,
                     raw_description,
                     result.reference,
-                    result.amount,
-                    result.balance,
+                    amount_value,
+                    balance_value,
                     json.dumps(result.raw_data) if result.raw_data else None,
                     result.external_id
                 ))
@@ -436,16 +441,32 @@ async def confirm_bank_import(
                 # Log error but continue
                 continue
         
-        conn.commit()
+            conn.commit()
+            
+            return ImportConfirmResponse(
+                bank_import_batch_id=batch_id,
+                transactions_inserted=transactions_inserted,
+                transactions_skipped_as_duplicates=transactions_skipped,
+                errors_count=errors_count,
+                period_start=period_start.isoformat() if period_start else None,
+                period_end=period_end.isoformat() if period_end else None,
+                status="IMPORTED"
+            )
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        # Log the full error for debugging
+        import traceback
+        import logging
+        logger = logging.getLogger(__name__)
+        error_details = traceback.format_exc()
+        logger.error(f"Error importing bank transactions: {str(e)}\n{error_details}")
         
-        return ImportConfirmResponse(
-            bank_import_batch_id=batch_id,
-            transactions_inserted=transactions_inserted,
-            transactions_skipped_as_duplicates=transactions_skipped,
-            errors_count=errors_count,
-            period_start=period_start.isoformat() if period_start else None,
-            period_end=period_end.isoformat() if period_end else None,
-            status="IMPORTED"
+        # Return a user-friendly error message
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error importing bank transactions: {str(e)}"
         )
 
 
