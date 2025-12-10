@@ -234,8 +234,9 @@ def create_bank_rule(pharmacy_id: int, rule: BankRuleCreate):
                 del rule_dict['allocate_json']
                 rule_dict['conditions'] = [dict(c) for c in conditions]
                 
-                # Return as BankRule Pydantic model to ensure proper serialization
-                return BankRule(**rule_dict)
+                # Return dict - FastAPI's response_model will handle conversion to BankRule
+                # This matches the pattern used in list_bank_rules endpoint
+                return rule_dict
     except HTTPException:
         raise
     except Exception as e:
