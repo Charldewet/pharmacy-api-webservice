@@ -5,7 +5,7 @@ from pydantic import BaseModel, EmailStr
 from datetime import date, datetime
 from pathlib import Path
 from ..db import get_conn
-from ..auth import get_current_user_id
+from ..auth import get_current_user_id, require_api_key
 from ..schemas import Account, AccountCreate
 import hashlib
 
@@ -504,8 +504,8 @@ def delete_pharmacy_target(
             "message": "Target deleted successfully"
         }
 
-@router.post("/chart-of-accounts", response_model=Account)
-def create_chart_of_account(account: AccountCreate, user_id: int = Depends(require_charl)):
+@router.post("/chart-of-accounts", response_model=Account, dependencies=[Depends(require_api_key)])
+def create_chart_of_account(account: AccountCreate):
     """
     Create a new account in the chart of accounts.
     
