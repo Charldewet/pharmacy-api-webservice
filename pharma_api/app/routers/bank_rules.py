@@ -212,17 +212,30 @@ def create_bank_rule(pharmacy_id: int, rule: BankRuleCreate):
                 # allocate_json is already parsed by psycopg (JSONB), so use it directly
                 allocate_value = rule_dict.get('allocate_json')
                 if allocate_value is None:
-                    rule_dict['allocate'] = []
+                    allocate_list = []
                 elif isinstance(allocate_value, (dict, list)):
                     # Already parsed by psycopg
-                    rule_dict['allocate'] = allocate_value if isinstance(allocate_value, list) else [allocate_value]
+                    allocate_list = allocate_value if isinstance(allocate_value, list) else [allocate_value]
                 else:
                     # String that needs parsing
-                    rule_dict['allocate'] = json.loads(allocate_value)
+                    allocate_list = json.loads(allocate_value)
+                
+                # Ensure allocate_list contains plain dicts, not Pydantic models
+                allocate_list = [
+                    {
+                        'account_id': int(alloc.get('account_id') if isinstance(alloc, dict) else alloc.account_id),
+                        'percent': float(alloc.get('percent') if isinstance(alloc, dict) else alloc.percent),
+                        'vat_code': str(alloc.get('vat_code', 'NO_VAT') if isinstance(alloc, dict) else getattr(alloc, 'vat_code', 'NO_VAT'))
+                    }
+                    for alloc in allocate_list
+                ]
+                
+                rule_dict['allocate'] = allocate_list
                 del rule_dict['allocate_json']
                 rule_dict['conditions'] = [dict(c) for c in conditions]
                 
-                return rule_dict
+                # Return as BankRule Pydantic model to ensure proper serialization
+                return BankRule(**rule_dict)
     except HTTPException:
         raise
     except Exception as e:
