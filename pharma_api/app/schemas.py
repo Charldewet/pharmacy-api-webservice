@@ -513,3 +513,16 @@ class GenerateAISuggestionsResponse(BaseModel):
 class AcceptAISuggestionRequest(BaseModel):
     """Request to accept an AI suggestion"""
     account_id: Optional[int] = None  # Optional override of suggested account
+
+class ManualClassifyRequest(BaseModel):
+    """Request to manually classify a bank statement line"""
+    account_id: int
+    description: Optional[str] = None  # Optional override description
+    note: Optional[str] = None  # Optional note for audit trail
+
+class ManualClassifyResponse(BaseModel):
+    """Response from manual classification"""
+    message: str
+    ledger_entry_id: int
+    bank_transaction_id: int
+    classification_status: str

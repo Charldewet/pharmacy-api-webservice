@@ -157,7 +157,6 @@ class BankCsvParser:
         
         date_str = row_lower.get('date') or row.get('Date') or row.get('date')
         description_str = row_lower.get('description') or row.get('Description') or row.get('description')
-        amount_str = row_lower.get('amount') or row.get('Amount') or row.get('amount')
         balance_str = row_lower.get('balance') or row.get('Balance')
         reference_str = row_lower.get('reference') or row.get('Reference')
         
@@ -166,12 +165,14 @@ class BankCsvParser:
             raise ValueError("Missing Date")
         if not description_str or str(description_str).strip() == '':
             raise ValueError("Missing Description")
-        if amount_str is None or str(amount_str).strip() == '':
-            raise ValueError("Missing Amount")
+        
+        # Parse amount - handle both single "amount" field and separate "debit"/"credit" columns
+        parsed_amount = self._parse_amount_from_row(row, row_lower)
+        if parsed_amount is None:
+            raise ValueError("Missing Amount (no amount, debit, or credit field found)")
         
         # Parse fields
         parsed_date = self._parse_date(str(date_str))
-        parsed_amount = self._parse_amount(str(amount_str))
         parsed_balance = self._parse_amount(str(balance_str)) if balance_str and str(balance_str).strip() else None
         
         return ParsedRow(
@@ -184,6 +185,69 @@ class BankCsvParser:
             balance=parsed_balance,
             raw_data=dict(row)
         )
+    
+    def _parse_amount_from_row(self, row: Dict, row_lower: Dict) -> Optional[Decimal]:
+        """
+        Parse amount from row, handling both single "amount" field and separate "debit"/"credit" columns.
+        Returns positive for credits (money in), negative for debits (money out).
+        """
+        # First, try separate debit/credit columns (case-insensitive)
+        debit_str = None
+        credit_str = None
+        
+        # Check for debit field
+        for key in row_lower.keys():
+            if 'debit' in key.lower() and row_lower[key] and str(row_lower[key]).strip():
+                debit_str = str(row_lower[key])
+                break
+        
+        # Check for credit field
+        for key in row_lower.keys():
+            if 'credit' in key.lower() and row_lower[key] and str(row_lower[key]).strip():
+                credit_str = str(row_lower[key])
+                break
+        
+        # Also check common variations
+        if not debit_str:
+            debit_str = row_lower.get('debit') or row_lower.get('withdrawal') or row_lower.get('amount debit')
+        if not credit_str:
+            credit_str = row_lower.get('credit') or row_lower.get('deposit') or row_lower.get('amount credit')
+        
+        # If we have separate debit/credit columns, use them
+        # Check which one has a value (typically only one will be filled per row)
+        if debit_str and str(debit_str).strip():
+            try:
+                debit_amount = self._parse_amount(str(debit_str))
+                if debit_amount is not None and debit_amount != 0:
+                    return -abs(debit_amount)  # Negative for debits (money out)
+            except (ValueError, InvalidOperation):
+                pass  # Try credit or fallback to amount field
+        
+        if credit_str and str(credit_str).strip():
+            try:
+                credit_amount = self._parse_amount(str(credit_str))
+                if credit_amount is not None and credit_amount != 0:
+                    return abs(credit_amount)  # Positive for credits (money in)
+            except (ValueError, InvalidOperation):
+                pass  # Fallback to amount field
+        
+        # Fall back to single "amount" field (case-insensitive)
+        amount_str = None
+        for key in row_lower.keys():
+            if 'amount' in key.lower() and key.lower() not in ['debit', 'credit', 'amount debit', 'amount credit']:
+                if row_lower[key] and str(row_lower[key]).strip():
+                    amount_str = str(row_lower[key])
+                    break
+        
+        # Also try exact matches
+        if not amount_str:
+            amount_str = row_lower.get('amount') or row.get('Amount') or row.get('amount')
+        
+        if amount_str and str(amount_str).strip():
+            # Parse the amount - preserve sign if present
+            return self._parse_amount(str(amount_str))
+        
+        return None
     
     def _parse_date(self, date_str: str) -> date:
         """
