@@ -432,38 +432,54 @@ def delete_bank_rule(rule_id: int):
             return {"message": "Bank rule deleted"}
 
 
-@router.post("/bank-import-batches/{batch_id}/apply-rules", response_model=ApplyRulesResponse)
+@router.post("/bank-import-batches/{batch_id}/apply-rules")
 def apply_rules_to_batch(batch_id: int):
     """Apply all active rules to transactions in a batch"""
-    with get_conn() as conn:
-        result = BankRuleEngine.apply_rules_to_batch(conn, batch_id)
-        
-        return ApplyRulesResponse(
-            statement_id=batch_id,
-            total_lines=result['total_lines'],
-            classified_by_rule=result['classified_by_rule'],
-            already_classified=result['already_classified'],
-            unclassified=result['unclassified']
-        )
+    try:
+        with get_conn() as conn:
+            result = BankRuleEngine.apply_rules_to_batch(conn, batch_id)
+            
+            response_data = {
+                'statement_id': batch_id,
+                'total_lines': result['total_lines'],
+                'classified_by_rule': result['classified_by_rule'],
+                'already_classified': result['already_classified'],
+                'unclassified': result['unclassified']
+            }
+            
+            return JSONResponse(content=response_data)
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Error applying rules to batch {batch_id}: {str(e)}\n{error_trace}")
+        raise HTTPException(status_code=500, detail=f"Failed to apply rules: {str(e)}")
 
 
 @router.post("/bank-transactions/{transaction_id}/apply-rules")
 def apply_rules_to_transaction(transaction_id: int):
     """Apply rules to a single transaction"""
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            # Get pharmacy_id
-            cur.execute("SELECT pharmacy_id FROM pharma.bank_transactions WHERE id = %s", (transaction_id,))
-            txn = cur.fetchone()
-            if not txn:
-                raise HTTPException(status_code=404, detail="Transaction not found")
-            
-            rule_id = BankRuleEngine.apply_rules_to_transaction(conn, transaction_id, txn['pharmacy_id'])
-            
-            if rule_id:
-                return {"message": "Rule applied", "rule_id": rule_id}
-            else:
-                return {"message": "No matching rule found"}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # Get pharmacy_id
+                cur.execute("SELECT pharmacy_id FROM pharma.bank_transactions WHERE id = %s", (transaction_id,))
+                txn = cur.fetchone()
+                if not txn:
+                    raise HTTPException(status_code=404, detail="Transaction not found")
+                
+                rule_id = BankRuleEngine.apply_rules_to_transaction(conn, transaction_id, txn['pharmacy_id'])
+                
+                if rule_id:
+                    return JSONResponse(content={"message": "Rule applied", "rule_id": rule_id})
+                else:
+                    return JSONResponse(content={"message": "No matching rule found"})
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Error applying rules to transaction {transaction_id}: {str(e)}\n{error_trace}")
+        raise HTTPException(status_code=500, detail=f"Failed to apply rules: {str(e)}")
 
 
 @router.post("/bank-import-batches/{batch_id}/generate-ai-suggestions", response_model=GenerateAISuggestionsResponse)
