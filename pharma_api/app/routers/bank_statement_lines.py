@@ -133,15 +133,40 @@ def manual_classify_transaction(line_id: int, request: ManualClassifyRequest):
                 ))
                 
                 ledger_entry = cur.fetchone()
+                if not ledger_entry:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to create ledger entry: No ID returned from INSERT"
+                    )
                 ledger_entry_id = ledger_entry['id']
             except Exception as e:
+                import traceback
+                error_trace = traceback.format_exc()
+                logger.error(f"Error creating ledger entry for transaction {line_id}: {str(e)}\n{error_trace}")
+                
                 # Check if it's a unique constraint violation
                 error_msg = str(e).lower()
-                if 'unique' in error_msg or 'duplicate' in error_msg:
+                if 'unique' in error_msg or 'duplicate' in error_msg or 'already exists' in error_msg:
                     raise HTTPException(
                         status_code=400,
                         detail=f"Transaction {line_id} already has a ledger entry. Cannot create duplicate."
                     )
+                
+                # Check if it's a column doesn't exist error
+                if 'column' in error_msg and 'does not exist' in error_msg:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Database schema error: {str(e)}. Please ensure bank_rules schema migration has been applied."
+                    )
+                
+                # Check if it's an enum value error
+                if 'invalid input value for enum' in error_msg or 'invalid value for enum' in error_msg:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Invalid enum value: {str(e)}. Please ensure MANUAL is a valid ledger_source value."
+                    )
+                
+                # Generic error with full details for debugging
                 raise HTTPException(
                     status_code=500,
                     detail=f"Failed to create ledger entry: {str(e)}"
