@@ -33,7 +33,7 @@ def manual_classify_transaction(line_id: int, request: ManualClassifyRequest):
     """
     try:
         with get_conn() as conn:
-        with conn.cursor() as cur:
+            with conn.cursor() as cur:
             # Get the bank transaction
             cur.execute("""
                 SELECT id, pharmacy_id, bank_account_id, date, description, amount,
