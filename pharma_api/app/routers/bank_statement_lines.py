@@ -54,8 +54,9 @@ def manual_classify_transaction(line_id: int, request: ManualClassifyRequest):
                     )
                 
                 # Validate account exists and is active
+                # Note: accounts table is global (shared across all pharmacies), no pharmacy_id column
                 cur.execute("""
-                    SELECT id, pharmacy_id, is_active
+                    SELECT id, is_active
                     FROM pharma.accounts
                     WHERE id = %s AND is_active = true
                 """, (request.account_id,))
@@ -65,13 +66,6 @@ def manual_classify_transaction(line_id: int, request: ManualClassifyRequest):
                     raise HTTPException(
                         status_code=400,
                         detail=f"Account {request.account_id} not found or is inactive"
-                    )
-                
-                # Validate account belongs to same pharmacy (optional check for security)
-                if account['pharmacy_id'] != txn['pharmacy_id']:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Account {request.account_id} does not belong to pharmacy {txn['pharmacy_id']}"
                     )
                 
                 # Compute signed amount
