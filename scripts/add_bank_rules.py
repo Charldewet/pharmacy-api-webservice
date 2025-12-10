@@ -74,7 +74,7 @@ def get_vat_code_for_account(account_name: str, account_type: Optional[str] = No
     return "NO_VAT"
 
 def get_all_accounts() -> Dict[str, Dict]:
-    """Get all accounts via API as a name -> {id, type} mapping"""
+    """Get all accounts via API as name -> {id, type, code} and code -> {id, type, name} mapping"""
     url = f"{API_BASE_URL}/accounts?is_active=true"
     headers = {'X-API-Key': API_KEY}
     
@@ -82,10 +82,16 @@ def get_all_accounts() -> Dict[str, Dict]:
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
             accounts = response.json()
-            return {
-                acc['name']: {'id': acc['id'], 'type': acc['type']}
-                for acc in accounts
-            }
+            result = {}
+            # Map by name
+            for acc in accounts:
+                result[acc['name']] = {'id': acc['id'], 'type': acc['type'], 'code': acc.get('code')}
+            # Also map by code
+            for acc in accounts:
+                code = acc.get('code')
+                if code:
+                    result[code] = {'id': acc['id'], 'type': acc['type'], 'name': acc['name']}
+            return result
         else:
             print(f"❌ Failed to fetch accounts: {response.status_code}: {response.text}")
             return {}
@@ -95,42 +101,73 @@ def get_all_accounts() -> Dict[str, Dict]:
 
 def convert_rule_format(rule_json: Dict, accounts_map: Dict[str, int], pharmacy_id: int = 1) -> Optional[Dict]:
     """Convert JSON rule format to API format"""
-    # Determine group_type
-    if 'conditions_all' in rule_json and rule_json['conditions_all']:
+    # Support both old format (conditions_all/conditions_any) and new format (conditions array)
+    if 'conditions' in rule_json and rule_json['conditions']:
+        # New format: conditions array with group_type in each condition
+        api_conditions = []
+        for cond in rule_json['conditions']:
+            api_conditions.append({
+                'group_type': cond.get('group_type', 'ALL'),
+                'field': cond['field'],
+                'operator': cond['operator'],
+                'value': cond['value']
+            })
+    elif 'conditions_all' in rule_json and rule_json['conditions_all']:
+        # Old format: conditions_all
         group_type = 'ALL'
         conditions = rule_json['conditions_all']
+        api_conditions = []
+        for cond in conditions:
+            api_conditions.append({
+                'group_type': group_type,
+                'field': cond['field'],
+                'operator': cond['operator'],
+                'value': cond['value']
+            })
     elif 'conditions_any' in rule_json and rule_json['conditions_any']:
+        # Old format: conditions_any
         group_type = 'ANY'
         conditions = rule_json['conditions_any']
+        api_conditions = []
+        for cond in conditions:
+            api_conditions.append({
+                'group_type': group_type,
+                'field': cond['field'],
+                'operator': cond['operator'],
+                'value': cond['value']
+            })
     else:
         # Empty conditions - use ALL with empty list
-        group_type = 'ALL'
-        conditions = []
-    
-    # Convert conditions
-    api_conditions = []
-    for cond in conditions:
-        api_conditions.append({
-            'group_type': group_type,
-            'field': cond['field'],
-            'operator': cond['operator'],
-            'value': cond['value']
-        })
+        api_conditions = []
     
     # Convert allocations
     api_allocate = []
     for alloc in rule_json['allocate']:
-        account_name = alloc['account']
-        account_info = accounts_map.get(account_name)
+        # Support both 'account' (name) and 'account_code' (code)
+        account_name = alloc.get('account')
+        account_code = alloc.get('account_code')
+        
+        account_info = None
+        lookup_key = None
+        
+        if account_code:
+            # Look up by account code
+            account_info = accounts_map.get(account_code)
+            lookup_key = account_code
+        elif account_name:
+            # Look up by account name
+            account_info = accounts_map.get(account_name)
+            lookup_key = account_name
         
         if not account_info:
-            print(f"⚠️  Warning: Account '{account_name}' not found. Skipping rule '{rule_json['name']}'")
+            print(f"⚠️  Warning: Account '{lookup_key}' (name: {account_name}, code: {account_code}) not found. Skipping rule '{rule_json['name']}'")
             return None
         
         account_id = account_info['id'] if isinstance(account_info, dict) else account_info
         account_type = account_info.get('type') if isinstance(account_info, dict) else None
+        actual_account_name = account_info.get('name', lookup_key) if isinstance(account_info, dict) else lookup_key
         
-        vat_code = get_vat_code_for_account(account_name, account_type)
+        vat_code = alloc.get('vat_code') or get_vat_code_for_account(actual_account_name, account_type)
         
         api_allocate.append({
             'account_id': account_id,
@@ -173,7 +210,7 @@ def create_rule_via_api(rule_data: Dict) -> bool:
 
 def main():
     """Main function"""
-    # Rules JSON from user
+    # Rules JSON from user - using account codes
     rules_json = {
         "rules": [
             {
@@ -510,9 +547,10 @@ def main():
     failed_count = 0
     skipped_count = 0
     
-    for idx, rule_json in enumerate(rules_json['rules'], 1):
-        # Set priority based on order (lower = higher priority)
-        rule_json['priority'] = idx
+    for rule_json in rules_json['rules']:
+        # Use priority from rule if specified, otherwise use order
+        if 'priority' not in rule_json:
+            rule_json['priority'] = 100  # Default priority
         
         api_rule = convert_rule_format(rule_json, accounts_map, pharmacy_id)
         
