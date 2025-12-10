@@ -535,3 +535,45 @@ class ReconciliationSummary(BaseModel):
     bank_total: float
     ledger_total: float
     difference: float
+
+# ========== MANAGEMENT FINANCIAL STATEMENTS SCHEMAS ==========
+
+class AccountLineItem(BaseModel):
+    """A single account line item in the P&L statement"""
+    account_id: int
+    code: str
+    name: str
+    amount: float
+
+class ManagementStatementSummary(BaseModel):
+    """Summary totals for the management statement"""
+    total_revenue: float
+    total_cogs: float
+    gross_profit: float
+    gross_profit_percent: float
+    total_expenses: float
+    operating_profit: float
+    total_other_income: float
+    total_other_expenses: float
+    net_profit: float
+
+class ManagementStatement(BaseModel):
+    """Monthly management P&L statement"""
+    pharmacy_id: int
+    year: int
+    month: int
+    from_date: str  # YYYY-MM-DD format
+    to_date: str    # YYYY-MM-DD format
+    summary: ManagementStatementSummary
+    revenue: List[AccountLineItem]
+    cogs: List[AccountLineItem]
+    expenses: List[AccountLineItem]
+    other_income: List[AccountLineItem]
+    other_expenses: List[AccountLineItem]
+
+class ManagementTrendPoint(BaseModel):
+    """A single month's summary for trend analysis"""
+    month: str  # YYYY-MM format
+    revenue: float
+    gross_profit: float
+    net_profit: float

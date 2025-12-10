@@ -8,7 +8,7 @@ from .routers import broadcast
 from .routers import authn
 from .routers import admin
 from .routers import debtors
-from .routers import banking, ledger, bank_imports, accounts, bank_rules, bank_statement_lines
+from .routers import banking, ledger, bank_imports, accounts, bank_rules, bank_statement_lines, management_statement
 
 class ORJSONResponse:
     media_type = "application/json"
@@ -55,6 +55,7 @@ app.include_router(bank_imports.router)
 app.include_router(accounts.router)
 app.include_router(bank_rules.router)
 app.include_router(bank_statement_lines.router)
+app.include_router(management_statement.router)
 
 @app.get("/health")
 async def health_check():
