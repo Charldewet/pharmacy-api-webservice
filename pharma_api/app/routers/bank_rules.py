@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/bank-rules", tags=["bank-rules"])
 
 
-@router.get("/pharmacies/{pharmacy_id}/bank-rules", response_model=List[BankRule])
+@router.get("/pharmacies/{pharmacy_id}/bank-rules")
 def list_bank_rules(pharmacy_id: int):
     """List all bank rules for a pharmacy"""
     with get_conn() as conn:
@@ -66,9 +66,21 @@ def list_bank_rules(pharmacy_id: int):
                     rule_dict['allocate'] = json.loads(allocate_value)
                 del rule_dict['allocate_json']  # Remove JSON field, use allocate instead
                 rule_dict['conditions'] = [dict(c) for c in conditions]
+                
+                # Convert datetime objects to ISO format strings for JSON serialization
+                if rule_dict.get('created_at'):
+                    rule_dict['created_at'] = rule_dict['created_at'].isoformat()
+                if rule_dict.get('updated_at'):
+                    rule_dict['updated_at'] = rule_dict['updated_at'].isoformat()
+                for condition in rule_dict['conditions']:
+                    if condition.get('created_at'):
+                        condition['created_at'] = condition['created_at'].isoformat()
+                    if condition.get('updated_at'):
+                        condition['updated_at'] = condition['updated_at'].isoformat()
+                
                 result.append(rule_dict)
             
-            return result
+            return JSONResponse(content=result)
 
 
 @router.post("/pharmacies/{pharmacy_id}/bank-rules")
@@ -268,7 +280,7 @@ def create_bank_rule(pharmacy_id: int, rule: BankRuleCreate):
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/bank-rules/{rule_id}", response_model=BankRule)
+@router.get("/bank-rules/{rule_id}")
 def get_bank_rule(rule_id: int):
     """Get a single bank rule"""
     with get_conn() as conn:
@@ -307,10 +319,21 @@ def get_bank_rule(rule_id: int):
             del rule_dict['allocate_json']
             rule_dict['conditions'] = [dict(c) for c in conditions]
             
-            return rule_dict
+            # Convert datetime objects to ISO format strings for JSON serialization
+            if rule_dict.get('created_at'):
+                rule_dict['created_at'] = rule_dict['created_at'].isoformat()
+            if rule_dict.get('updated_at'):
+                rule_dict['updated_at'] = rule_dict['updated_at'].isoformat()
+            for condition in rule_dict['conditions']:
+                if condition.get('created_at'):
+                    condition['created_at'] = condition['created_at'].isoformat()
+                if condition.get('updated_at'):
+                    condition['updated_at'] = condition['updated_at'].isoformat()
+            
+            return JSONResponse(content=rule_dict)
 
 
-@router.put("/bank-rules/{rule_id}", response_model=BankRule)
+@router.put("/bank-rules/{rule_id}")
 def update_bank_rule(rule_id: int, rule_update: BankRuleUpdate):
     """Update a bank rule"""
     
@@ -339,7 +362,16 @@ def update_bank_rule(rule_id: int, rule_update: BankRuleUpdate):
             
             if rule_update.allocate is not None:
                 updates.append("allocate_json = %s")
-                params.append(json.dumps(rule_update.allocate))
+                # Convert Pydantic models to dicts before JSON serialization
+                allocate_dicts = [
+                    {
+                        'account_id': alloc.account_id,
+                        'percent': alloc.percent,
+                        'vat_code': alloc.vat_code
+                    }
+                    for alloc in rule_update.allocate
+                ]
+                params.append(json.dumps(allocate_dicts))
             
             if rule_update.contact_name is not None:
                 updates.append("contact_name = %s")
