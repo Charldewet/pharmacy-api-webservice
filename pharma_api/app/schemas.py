@@ -526,3 +526,12 @@ class ManualClassifyResponse(BaseModel):
     ledger_entry_id: int
     bank_transaction_id: int
     classification_status: str
+
+class ReconciliationSummary(BaseModel):
+    """Reconciliation summary for a pharmacy and month"""
+    total_lines: int
+    reconciled_lines: int
+    unmatched_lines: int
+    bank_total: float
+    ledger_total: float
+    difference: float
