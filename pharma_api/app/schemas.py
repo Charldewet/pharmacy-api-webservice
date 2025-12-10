@@ -404,6 +404,12 @@ class BankRuleAllocation(BaseModel):
     account_id: int
     percent: float  # 0-100
     vat_code: Optional[str] = "NO_VAT"  # VAT code if applicable
+    
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            # Ensure proper JSON serialization
+        }
 
 class BankRuleConditionBase(BaseModel):
     """Base condition for matching bank transactions"""

@@ -4,6 +4,7 @@ Endpoints for managing bank rules and applying them to transactions.
 """
 
 from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import JSONResponse
 from typing import List, Optional
 import logging
 import json
@@ -70,7 +71,7 @@ def list_bank_rules(pharmacy_id: int):
             return result
 
 
-@router.post("/pharmacies/{pharmacy_id}/bank-rules", response_model=BankRule)
+@router.post("/pharmacies/{pharmacy_id}/bank-rules")
 def create_bank_rule(pharmacy_id: int, rule: BankRuleCreate):
     """Create a new bank rule"""
     
@@ -234,9 +235,19 @@ def create_bank_rule(pharmacy_id: int, rule: BankRuleCreate):
                 del rule_dict['allocate_json']
                 rule_dict['conditions'] = [dict(c) for c in conditions]
                 
-                # Return dict - FastAPI's response_model will handle conversion to BankRule
-                # This matches the pattern used in list_bank_rules endpoint
-                return rule_dict
+                # Return JSONResponse directly to bypass Pydantic serialization issues
+                # Convert datetime objects to ISO format strings for JSON serialization
+                if rule_dict.get('created_at'):
+                    rule_dict['created_at'] = rule_dict['created_at'].isoformat()
+                if rule_dict.get('updated_at'):
+                    rule_dict['updated_at'] = rule_dict['updated_at'].isoformat()
+                for condition in rule_dict['conditions']:
+                    if condition.get('created_at'):
+                        condition['created_at'] = condition['created_at'].isoformat()
+                    if condition.get('updated_at'):
+                        condition['updated_at'] = condition['updated_at'].isoformat()
+                
+                return JSONResponse(content=rule_dict, status_code=201)
     except HTTPException:
         raise
     except Exception as e:
