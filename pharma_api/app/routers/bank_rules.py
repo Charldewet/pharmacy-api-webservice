@@ -151,8 +151,18 @@ def create_bank_rule(pharmacy_id: int, rule: BankRuleCreate):
                         detail=f"Allocation percentages must sum to 100. Current sum: {total_percent}"
                     )
                 
-                # Convert allocate to JSON
-                allocate_json = json.dumps(rule.allocate)
+                # Convert allocate to JSON - handle Pydantic models
+                # rule.allocate is a list of BankRuleAllocation Pydantic models
+                # Convert them to dicts before JSON serialization
+                allocate_dicts = [
+                    {
+                        'account_id': alloc.account_id,
+                        'percent': alloc.percent,
+                        'vat_code': alloc.vat_code
+                    }
+                    for alloc in rule.allocate
+                ]
+                allocate_json = json.dumps(allocate_dicts)
                 
                 # Insert rule
                 cur.execute("""
