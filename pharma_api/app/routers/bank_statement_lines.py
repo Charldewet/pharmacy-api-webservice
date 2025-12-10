@@ -31,7 +31,8 @@ def manual_classify_transaction(line_id: int, request: ManualClassifyRequest):
     - **description**: Optional description override (uses transaction description if not provided)
     - **note**: Optional note for audit trail (stored in ledger entry if needed)
     """
-    with get_conn() as conn:
+    try:
+        with get_conn() as conn:
         with conn.cursor() as cur:
             # Get the bank transaction
             cur.execute("""
@@ -191,6 +192,18 @@ def manual_classify_transaction(line_id: int, request: ManualClassifyRequest):
                 bank_transaction_id=line_id,
                 classification_status='user_override'
             )
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        # Catch any other unexpected errors
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Unexpected error in manual_classify_transaction for line {line_id}: {str(e)}\n{error_trace}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected error: {str(e)}"
+        )
 
 
 @router.get("/{line_id}", response_model=BankTransactionWithClassification, dependencies=[Depends(require_api_key)])
