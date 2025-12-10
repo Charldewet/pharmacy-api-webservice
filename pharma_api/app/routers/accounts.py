@@ -77,6 +77,83 @@ def list_accounts(
         return cur.fetchall()
 
 
+@router.post("", response_model=Account, dependencies=[Depends(require_api_key)])
+def create_account(account: AccountCreate):
+    """
+    Create a new account in the chart of accounts.
+    
+    - **code**: Unique account code (max 10 characters, must be unique)
+    - **name**: Display name of the account
+    - **type**: Account type (ASSET, LIABILITY, EQUITY, INCOME, COGS, EXPENSE, FINANCE_COST, OTHER_INCOME, TAX)
+    - **category**: Account category for grouping
+    - **parent_account_id**: Optional ID of parent account if this is a sub-account
+    - **is_active**: Whether the account is active (default: true)
+    - **display_order**: Order for display/sorting (default: 0)
+    - **notes**: Optional notes about the account
+    """
+    # Validate account type
+    valid_types = [
+        'ASSET', 'LIABILITY', 'EQUITY', 'INCOME', 'COGS',
+        'EXPENSE', 'FINANCE_COST', 'OTHER_INCOME', 'TAX'
+    ]
+    if account.type.upper() not in valid_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid account type '{account.type}'. Must be one of: {', '.join(valid_types)}"
+        )
+    
+    # Validate code length
+    if len(account.code) > 10:
+        raise HTTPException(
+            status_code=400,
+            detail="Account code must be 10 characters or less"
+        )
+    
+    with get_conn() as conn, conn.cursor() as cur:
+        # Check if code already exists
+        cur.execute("""
+            SELECT id FROM pharma.accounts WHERE code = %s
+        """, (account.code,))
+        if cur.fetchone():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Account with code '{account.code}' already exists"
+            )
+        
+        # Validate parent_account_id if provided
+        if account.parent_account_id is not None:
+            cur.execute("""
+                SELECT id FROM pharma.accounts WHERE id = %s
+            """, (account.parent_account_id,))
+            if not cur.fetchone():
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Parent account with ID {account.parent_account_id} not found"
+                )
+        
+        # Insert new account
+        cur.execute("""
+            INSERT INTO pharma.accounts 
+            (code, name, type, category, parent_account_id, is_active, display_order, notes)
+            VALUES (%s, %s, %s::pharma.account_type, %s, %s, %s, %s, %s)
+            RETURNING id, code, name, type::text as type, category, parent_account_id,
+                     is_active, display_order, notes, created_at, updated_at
+        """, (
+            account.code,
+            account.name,
+            account.type.upper(),
+            account.category,  # Empty string is fine since category is NOT NULL but can be empty
+            account.parent_account_id,
+            account.is_active,
+            account.display_order,
+            account.notes
+        ))
+        
+        result = cur.fetchone()
+        conn.commit()
+        return result
+
+
 @router.get("/{account_id}", response_model=Account, dependencies=[Depends(require_api_key)])
 def get_account(account_id: int):
     """
