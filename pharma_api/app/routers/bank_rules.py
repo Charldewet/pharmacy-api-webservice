@@ -74,86 +74,163 @@ def list_bank_rules(pharmacy_id: int):
 def create_bank_rule(pharmacy_id: int, rule: BankRuleCreate):
     """Create a new bank rule"""
     
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            # Validate pharmacy exists
-            cur.execute("SELECT pharmacy_id FROM pharma.pharmacies WHERE pharmacy_id = %s", (pharmacy_id,))
-            if not cur.fetchone():
-                raise HTTPException(status_code=404, detail="Pharmacy not found")
-            
-            # Convert allocate to JSON
-            allocate_json = json.dumps(rule.allocate)
-            
-            # Insert rule
-            cur.execute("""
-                INSERT INTO pharma.bank_rules
-                (pharmacy_id, name, type, priority, allocate_json, contact_name, is_active)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                RETURNING id, pharmacy_id, name, type, priority, allocate_json, contact_name,
-                          is_active, created_by_user_id, created_at, updated_at
-            """, (
-                pharmacy_id,
-                rule.name,
-                rule.type,
-                rule.priority,
-                allocate_json,
-                rule.contact_name,
-                True
-            ))
-            
-            rule_row = cur.fetchone()
-            rule_id = rule_row['id']
-            
-            # Insert conditions
-            for condition in rule.conditions:
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # Validate pharmacy exists
+                cur.execute("SELECT pharmacy_id FROM pharma.pharmacies WHERE pharmacy_id = %s", (pharmacy_id,))
+                if not cur.fetchone():
+                    raise HTTPException(status_code=404, detail="Pharmacy not found")
+                
+                # Validate pharmacy_id matches (if provided in body)
+                # Note: pharmacy_id in body is optional/redundant since it's in the path
+                # But if provided, it must match the path parameter
+                if rule.pharmacy_id is not None and rule.pharmacy_id != pharmacy_id:
+                    raise HTTPException(status_code=400, detail=f"pharmacy_id mismatch: path has {pharmacy_id} but body has {rule.pharmacy_id}")
+                
+                # Validate conditions array is not empty
+                if not rule.conditions or len(rule.conditions) == 0:
+                    raise HTTPException(status_code=400, detail="At least one condition is required")
+                
+                # Validate allocate array is not empty
+                if not rule.allocate or len(rule.allocate) == 0:
+                    raise HTTPException(status_code=400, detail="At least one allocation is required")
+                
+                # Validate account_ids exist
+                account_ids = [alloc.account_id for alloc in rule.allocate]
+                if account_ids:
+                    # Use IN clause instead of ANY for better compatibility
+                    placeholders = ','.join(['%s'] * len(account_ids))
+                    cur.execute(f"""
+                        SELECT id FROM pharma.accounts 
+                        WHERE id IN ({placeholders}) AND is_active = true
+                    """, account_ids)
+                    valid_accounts = {row['id'] for row in cur.fetchall()}
+                    invalid_accounts = set(account_ids) - valid_accounts
+                    if invalid_accounts:
+                        raise HTTPException(
+                            status_code=400, 
+                            detail=f"Invalid account IDs: {sorted(invalid_accounts)}. These accounts do not exist or are inactive."
+                        )
+                
+                # Validate enum values
+                valid_types = ['receive', 'spend', 'transfer']
+                if rule.type not in valid_types:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid type '{rule.type}'. Must be one of: {', '.join(valid_types)}"
+                    )
+                
+                valid_group_types = ['ALL', 'ANY']
+                valid_fields = ['description', 'reference', 'amount', 'amount_in', 'amount_out', 'date']
+                valid_operators = ['contains', 'not_contains', 'equals', 'starts_with', 'ends_with', 'greater_than', 'less_than', 'regex']
+                
+                for idx, condition in enumerate(rule.conditions):
+                    if condition.group_type not in valid_group_types:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid group_type '{condition.group_type}' in condition {idx + 1}. Must be one of: {', '.join(valid_group_types)}"
+                        )
+                    if condition.field not in valid_fields:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid field '{condition.field}' in condition {idx + 1}. Must be one of: {', '.join(valid_fields)}"
+                        )
+                    if condition.operator not in valid_operators:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid operator '{condition.operator}' in condition {idx + 1}. Must be one of: {', '.join(valid_operators)}"
+                        )
+                
+                # Validate allocation percentages sum to 100
+                total_percent = sum(alloc.percent for alloc in rule.allocate)
+                if abs(total_percent - 100.0) > 0.01:  # Allow small floating point differences
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Allocation percentages must sum to 100. Current sum: {total_percent}"
+                    )
+                
+                # Convert allocate to JSON
+                allocate_json = json.dumps(rule.allocate)
+                
+                # Insert rule
                 cur.execute("""
-                    INSERT INTO pharma.bank_rule_conditions
-                    (bank_rule_id, group_type, field, operator, value)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO pharma.bank_rules
+                    (pharmacy_id, name, type, priority, allocate_json, contact_name, is_active)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id, pharmacy_id, name, type, priority, allocate_json, contact_name,
+                              is_active, created_by_user_id, created_at, updated_at
                 """, (
-                    rule_id,
-                    condition.group_type,
-                    condition.field,
-                    condition.operator,
-                    condition.value
+                    pharmacy_id,
+                    rule.name,
+                    rule.type,
+                    rule.priority,
+                    allocate_json,
+                    rule.contact_name,
+                    True
                 ))
-            
-            conn.commit()
-            
-            # Fetch full rule with conditions
-            cur.execute("""
-                SELECT id, pharmacy_id, name, type, priority, allocate_json, contact_name,
-                       is_active, created_by_user_id, created_at, updated_at
-                FROM pharma.bank_rules
-                WHERE id = %s
-            """, (rule_id,))
-            
-            rule_result = cur.fetchone()
-            
-            cur.execute("""
-                SELECT id, bank_rule_id, group_type, field, operator, value, created_at, updated_at
-                FROM pharma.bank_rule_conditions
-                WHERE bank_rule_id = %s
-                ORDER BY id
-            """, (rule_id,))
-            
-            conditions = cur.fetchall()
-            
-            rule_dict = dict(rule_result)
-            # allocate_json is already parsed by psycopg (JSONB), so use it directly
-            allocate_value = rule_dict.get('allocate_json')
-            if allocate_value is None:
-                rule_dict['allocate'] = []
-            elif isinstance(allocate_value, (dict, list)):
-                # Already parsed by psycopg
-                rule_dict['allocate'] = allocate_value if isinstance(allocate_value, list) else [allocate_value]
-            else:
-                # String that needs parsing
-                rule_dict['allocate'] = json.loads(allocate_value)
-            del rule_dict['allocate_json']
-            rule_dict['conditions'] = [dict(c) for c in conditions]
-            
-            return rule_dict
+                
+                rule_row = cur.fetchone()
+                rule_id = rule_row['id']
+                
+                # Insert conditions
+                for condition in rule.conditions:
+                    cur.execute("""
+                        INSERT INTO pharma.bank_rule_conditions
+                        (bank_rule_id, group_type, field, operator, value)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (
+                        rule_id,
+                        condition.group_type,
+                        condition.field,
+                        condition.operator,
+                        condition.value
+                    ))
+                
+                conn.commit()
+                
+                # Fetch full rule with conditions
+                cur.execute("""
+                    SELECT id, pharmacy_id, name, type, priority, allocate_json, contact_name,
+                           is_active, created_by_user_id, created_at, updated_at
+                    FROM pharma.bank_rules
+                    WHERE id = %s
+                """, (rule_id,))
+                
+                rule_result = cur.fetchone()
+                
+                cur.execute("""
+                    SELECT id, bank_rule_id, group_type, field, operator, value, created_at, updated_at
+                    FROM pharma.bank_rule_conditions
+                    WHERE bank_rule_id = %s
+                    ORDER BY id
+                """, (rule_id,))
+                
+                conditions = cur.fetchall()
+                
+                rule_dict = dict(rule_result)
+                # allocate_json is already parsed by psycopg (JSONB), so use it directly
+                allocate_value = rule_dict.get('allocate_json')
+                if allocate_value is None:
+                    rule_dict['allocate'] = []
+                elif isinstance(allocate_value, (dict, list)):
+                    # Already parsed by psycopg
+                    rule_dict['allocate'] = allocate_value if isinstance(allocate_value, list) else [allocate_value]
+                else:
+                    # String that needs parsing
+                    rule_dict['allocate'] = json.loads(allocate_value)
+                del rule_dict['allocate_json']
+                rule_dict['conditions'] = [dict(c) for c in conditions]
+                
+                return rule_dict
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Error creating bank rule: {str(e)}\n{error_trace}")
+        # Return detailed error message to help with debugging
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @router.get("/bank-rules/{rule_id}", response_model=BankRule)

@@ -431,7 +431,7 @@ class BankRuleBase(BaseModel):
 
 class BankRuleCreate(BankRuleBase):
     """Create a new bank rule"""
-    pharmacy_id: int
+    pharmacy_id: Optional[int] = None  # Optional since it comes from path parameter
     conditions: List[BankRuleConditionBase]
 
 class BankRuleUpdate(BaseModel):
