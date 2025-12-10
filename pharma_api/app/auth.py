@@ -20,7 +20,10 @@ def require_api_key(authorization: Optional[str] = Header(None), x_api_key: Opti
 
 def get_current_user_id(authorization: Optional[str] = Header(None)) -> int:
     if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Authorization header")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Missing Authorization header. Please include 'Authorization: Bearer <token>' header in your request."
+        )
     token = authorization.split(" ", 1)[1].strip()
     try:
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
