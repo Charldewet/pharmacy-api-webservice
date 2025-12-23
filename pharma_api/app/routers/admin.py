@@ -5,7 +5,7 @@ from pydantic import BaseModel, EmailStr
 from datetime import date, datetime
 from pathlib import Path
 from ..db import get_conn
-from ..auth import get_current_user_id, require_api_key
+from ..auth import get_current_user_id, require_api_key, get_user_id_or_api_key
 from ..schemas import Account, AccountCreate
 import hashlib
 
@@ -330,11 +330,18 @@ class SaveTargetsResponse(BaseModel):
 def get_pharmacy_targets(
     pharmacy_id: int,
     month: str = Query(..., description="Month in YYYY-MM format"),
-    user_id: int = Depends(get_current_user_id)
+    user_id: Optional[int] = Depends(get_user_id_or_api_key)
 ):
-    """Get all targets for a pharmacy within a specific month"""
-    # Check user has access to this pharmacy
-    check_pharmacy_access(user_id, pharmacy_id, require_write=False)
+    """Get all targets for a pharmacy within a specific month
+    
+    Accepts either:
+    - API key: Use 'Authorization: Bearer <api-key>' or 'X-API-Key: <api-key>' header (no permission check)
+    - JWT token: Use 'Authorization: Bearer <jwt-token>' header (checks user permissions)
+    """
+    # If user_id is provided (JWT token), check permissions
+    # If user_id is None (API key), skip permission check
+    if user_id is not None:
+        check_pharmacy_access(user_id, pharmacy_id, require_write=False)
     
     # Validate month format
     try:

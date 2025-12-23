@@ -33,3 +33,43 @@ def get_current_user_id(authorization: Optional[str] = Header(None)) -> int:
         return int(sub)
     except PyJWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+
+def get_user_id_or_api_key(
+    authorization: Optional[str] = Header(None), 
+    x_api_key: Optional[str] = Header(None)
+) -> Optional[int]:
+    """
+    Accepts either API key or JWT token.
+    Returns user_id if JWT token is provided, None if API key is provided.
+    Raises HTTPException if neither is valid.
+    """
+    # Check for API key first
+    token = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+    elif x_api_key:
+        token = x_api_key.strip()
+    
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication. Provide either 'Authorization: Bearer <token>' or 'X-API-Key: <key>' header."
+        )
+    
+    # Check if it's an API key
+    if token == settings.API_KEY:
+        return None  # API key provided, no user_id needed
+    
+    # Otherwise, try to decode as JWT
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
+        sub = payload.get("sub")
+        if sub is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
+        return int(sub)
+    except PyJWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication. Provide either a valid JWT token or API key."
+        )
