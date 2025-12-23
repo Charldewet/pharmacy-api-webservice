@@ -393,11 +393,18 @@ def save_pharmacy_targets(
     pharmacy_id: int,
     month: str = Query(..., description="Month in YYYY-MM format"),
     targets_data: Dict[str, float] = Body(...),
-    user_id: int = Depends(get_current_user_id)
+    user_id: Optional[int] = Depends(get_user_id_or_api_key)
 ):
-    """Save or update targets for a pharmacy and month"""
-    # Check user has write access to this pharmacy
-    check_pharmacy_access(user_id, pharmacy_id, require_write=True)
+    """Save or update targets for a pharmacy and month
+    
+    Accepts either:
+    - API key: Use 'Authorization: Bearer <api-key>' or 'X-API-Key: <api-key>' header (no permission check)
+    - JWT token: Use 'Authorization: Bearer <jwt-token>' header (checks user permissions)
+    """
+    # If user_id is provided (JWT token), check permissions
+    # If user_id is None (API key), skip permission check
+    if user_id is not None:
+        check_pharmacy_access(user_id, pharmacy_id, require_write=True)
     
     if not targets_data or len(targets_data) == 0:
         raise HTTPException(status_code=400, detail="No targets provided")
@@ -457,7 +464,7 @@ def save_pharmacy_targets(
                 ON CONFLICT (pharmacy_id, date) DO UPDATE SET
                     target_value = EXCLUDED.target_value,
                     updated_at = EXCLUDED.updated_at,
-                    created_by_user_id = EXCLUDED.created_by_user_id
+                    created_by_user_id = COALESCE(EXCLUDED.created_by_user_id, pharma.pharmacy_targets.created_by_user_id)
             """, (pharmacy_id, target_date, target_value, user_id, now, now))
             
             saved_count += 1
@@ -476,11 +483,18 @@ def save_pharmacy_targets(
 def delete_pharmacy_target(
     pharmacy_id: int,
     target_date: str,
-    user_id: int = Depends(get_current_user_id)
+    user_id: Optional[int] = Depends(get_user_id_or_api_key)
 ):
-    """Delete a specific target for a pharmacy and date"""
-    # Check user has write access to this pharmacy
-    check_pharmacy_access(user_id, pharmacy_id, require_write=True)
+    """Delete a specific target for a pharmacy and date
+    
+    Accepts either:
+    - API key: Use 'Authorization: Bearer <api-key>' or 'X-API-Key: <api-key>' header (no permission check)
+    - JWT token: Use 'Authorization: Bearer <jwt-token>' header (checks user permissions)
+    """
+    # If user_id is provided (JWT token), check permissions
+    # If user_id is None (API key), skip permission check
+    if user_id is not None:
+        check_pharmacy_access(user_id, pharmacy_id, require_write=True)
     
     # Validate date format
     try:
