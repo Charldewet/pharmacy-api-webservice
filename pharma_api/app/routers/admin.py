@@ -67,6 +67,20 @@ class UserDetail(BaseModel):
     created_at: str
     pharmacies: List[dict]
 
+class UserPharmacyAccessDetail(BaseModel):
+    pharmacy_id: int
+    pharmacy_name: str
+    can_read: bool
+    can_write: bool
+
+class UserWithAccess(BaseModel):
+    user_id: int
+    username: str
+    email: str
+    is_active: bool
+    created_at: str
+    pharmacies: List[UserPharmacyAccessDetail]
+
 class CreateUserRequest(BaseModel):
     username: str
     email: EmailStr
@@ -118,6 +132,54 @@ def list_users(user_id: Optional[int] = Depends(require_admin_access)):
             ))
         
         return users
+
+@router.get("/users/access", response_model=List[UserWithAccess])
+def get_all_users_with_access(user_id: Optional[int] = Depends(require_admin_access)):
+    """Get all users with their pharmacy access details (read/write permissions)"""
+    with get_conn() as conn, conn.cursor() as cur:
+        # Get all users
+        cur.execute("""
+            SELECT user_id, username, email, is_active, created_at
+            FROM pharma.users
+            ORDER BY user_id
+        """)
+        
+        users_data = cur.fetchall()
+        result = []
+        
+        for user_row in users_data:
+            # Get pharmacy access for this user
+            cur.execute("""
+                SELECT 
+                    p.pharmacy_id,
+                    p.name as pharmacy_name,
+                    up.can_read,
+                    up.can_write
+                FROM pharma.user_pharmacies up
+                JOIN pharma.pharmacies p ON p.pharmacy_id = up.pharmacy_id
+                WHERE up.user_id = %s
+                ORDER BY p.pharmacy_id
+            """, (user_row['user_id'],))
+            
+            pharmacies = []
+            for pharm_row in cur.fetchall():
+                pharmacies.append(UserPharmacyAccessDetail(
+                    pharmacy_id=pharm_row['pharmacy_id'],
+                    pharmacy_name=pharm_row['pharmacy_name'],
+                    can_read=pharm_row['can_read'],
+                    can_write=pharm_row['can_write']
+                ))
+            
+            result.append(UserWithAccess(
+                user_id=user_row['user_id'],
+                username=user_row['username'],
+                email=user_row['email'],
+                is_active=user_row['is_active'],
+                created_at=user_row['created_at'].isoformat() if user_row['created_at'] else '',
+                pharmacies=pharmacies
+            ))
+        
+        return result
 
 @router.get("/users/{user_id}", response_model=UserDetail)
 def get_user(user_id_param: int, user_id: Optional[int] = Depends(require_admin_access)):
