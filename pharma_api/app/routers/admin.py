@@ -5,7 +5,7 @@ from pydantic import BaseModel, EmailStr
 from datetime import date, datetime
 from pathlib import Path
 from ..db import get_conn
-from ..auth import get_current_user_id, require_api_key, get_user_id_or_api_key
+from ..auth import get_current_user_id, require_api_key, get_user_id_or_api_key, require_admin_or_api_key
 from ..schemas import Account, AccountCreate
 import hashlib
 
@@ -20,6 +20,15 @@ def require_charl(user_id: int = Depends(get_current_user_id)) -> int:
     """Only allow admin users (Charl and Amin) to access admin endpoints"""
     if user_id not in ADMIN_USER_IDS:
         raise HTTPException(status_code=403, detail="Admin access restricted to authorized users only")
+    return user_id
+
+def require_admin_access(user_id: Optional[int] = Depends(require_admin_or_api_key)) -> Optional[int]:
+    """
+    Allow admin access via API key (treated as admin) or JWT token (must be admin user).
+    Returns user_id if JWT token is provided, None if API key is provided.
+    """
+    # require_admin_or_api_key already validates admin status for JWT tokens
+    # and allows API keys (which are treated as admin)
     return user_id
 
 def check_pharmacy_access(user_id: int, pharmacy_id: int, require_write: bool = False) -> None:
@@ -80,7 +89,7 @@ def _sha256(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 @router.get("/users", response_model=List[UserListItem])
-def list_users(user_id: int = Depends(require_charl)):
+def list_users(user_id: Optional[int] = Depends(require_admin_access)):
     """List all users in the system"""
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("""
@@ -111,7 +120,7 @@ def list_users(user_id: int = Depends(require_charl)):
         return users
 
 @router.get("/users/{user_id}", response_model=UserDetail)
-def get_user(user_id_param: int, user_id: int = Depends(require_charl)):
+def get_user(user_id_param: int, user_id: Optional[int] = Depends(require_admin_access)):
     """Get detailed information about a specific user"""
     with get_conn() as conn, conn.cursor() as cur:
         # Get user info
@@ -157,7 +166,7 @@ def get_user(user_id_param: int, user_id: int = Depends(require_charl)):
         )
 
 @router.post("/users", response_model=UserDetail)
-def create_user(req: CreateUserRequest, user_id: int = Depends(require_charl)):
+def create_user(req: CreateUserRequest, user_id: Optional[int] = Depends(require_admin_access)):
     """Create a new user"""
     password_hash = _sha256(req.password)
     
@@ -197,7 +206,7 @@ def create_user(req: CreateUserRequest, user_id: int = Depends(require_charl)):
         return get_user(new_user_id, user_id)
 
 @router.put("/users/{user_id_param}", response_model=UserDetail)
-def update_user(user_id_param: int, req: UpdateUserRequest, user_id: int = Depends(require_charl)):
+def update_user(user_id_param: int, req: UpdateUserRequest, user_id: Optional[int] = Depends(require_admin_access)):
     """Update user information (email, password, status)"""
     with get_conn() as conn, conn.cursor() as cur:
         # Check if user exists
@@ -240,7 +249,7 @@ def update_user(user_id_param: int, req: UpdateUserRequest, user_id: int = Depen
 
 @router.post("/users/{user_id_param}/pharmacies", response_model=UserDetail)
 def grant_pharmacy_access(user_id_param: int, req: GrantPharmacyAccessRequest, 
-                         user_id: int = Depends(require_charl)):
+                         user_id: Optional[int] = Depends(require_admin_access)):
     """Grant or update pharmacy access for a user"""
     with get_conn() as conn, conn.cursor() as cur:
         # Check if user exists
@@ -270,7 +279,7 @@ def grant_pharmacy_access(user_id_param: int, req: GrantPharmacyAccessRequest,
 
 @router.delete("/users/{user_id_param}/pharmacies/{pharmacy_id}", response_model=UserDetail)
 def revoke_pharmacy_access(user_id_param: int, pharmacy_id: int, 
-                          user_id: int = Depends(require_charl)):
+                          user_id: Optional[int] = Depends(require_admin_access)):
     """Revoke pharmacy access for a user"""
     with get_conn() as conn, conn.cursor() as cur:
         # Remove access
@@ -289,7 +298,7 @@ def revoke_pharmacy_access(user_id_param: int, pharmacy_id: int,
         return get_user(user_id_param, user_id)
 
 @router.get("/pharmacies", response_model=List[dict])
-def list_pharmacies(user_id: int = Depends(require_charl)):
+def list_pharmacies(user_id: Optional[int] = Depends(require_admin_access)):
     """List all available pharmacies"""
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("""
