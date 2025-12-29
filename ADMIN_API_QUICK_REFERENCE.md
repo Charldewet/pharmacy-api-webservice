@@ -2,7 +2,7 @@
 
 ## Authentication
 - **Required:** Bearer token in `Authorization` header
-- **Access:** Only user_id 2 (Charl) can access
+- **Access:** Only users with `is_admin: true` can access
 - **Base URL:** `/admin`
 
 ## Endpoints
@@ -27,7 +27,9 @@ Body: {
   email: string,
   password: string,
   pharmacy_ids?: number[],
-  can_write?: boolean
+  can_write?: boolean,
+  is_admin?: boolean,        // NEW: Grant admin role
+  is_accounting?: boolean    // NEW: Grant accounting role
 }
 → Returns: UserDetail
 ```
@@ -38,7 +40,9 @@ PUT /admin/users/{user_id}
 Body: {
   email?: string,
   password?: string,
-  is_active?: boolean
+  is_active?: boolean,
+  is_admin?: boolean,        // NEW: Update admin role
+  is_accounting?: boolean    // NEW: Update accounting role
 }
 → Returns: UserDetail
 ```
@@ -76,9 +80,14 @@ GET /admin/pharmacies
 ```javascript
 // Before showing admin UI, check:
 const currentUser = getCurrentUser();
-if (currentUser.user_id !== 2) {
+if (!currentUser.is_admin) {
   // Hide admin UI or redirect
 }
+
+// Check roles from login response:
+const user = loginResponse.user;
+const isAdmin = user.is_admin;        // true/false
+const isAccounting = user.is_accounting; // true/false
 ```
 
 

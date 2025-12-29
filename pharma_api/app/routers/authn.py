@@ -16,6 +16,8 @@ class UserInfo(BaseModel):
     user_id: int
     username: str
     email: str
+    is_admin: bool
+    is_accounting: bool
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -33,7 +35,7 @@ def login(req: LoginRequest):
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT user_id, username, email, password_hash, is_active
+            SELECT user_id, username, email, password_hash, is_active, is_admin, is_accounting
             FROM pharma.users
             WHERE username = %s
             """,
@@ -54,5 +56,11 @@ def login(req: LoginRequest):
         return TokenResponse(
             access_token=token,
             expires_in=int((exp - now).total_seconds()),
-            user=UserInfo(user_id=row["user_id"], username=row["username"], email=row["email"]),
+            user=UserInfo(
+                user_id=row["user_id"],
+                username=row["username"],
+                email=row["email"],
+                is_admin=row["is_admin"],
+                is_accounting=row["is_accounting"]
+            ),
         ) 

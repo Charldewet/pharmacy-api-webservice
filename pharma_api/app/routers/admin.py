@@ -11,15 +11,18 @@ import hashlib
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-# Admin user IDs
+# Admin user IDs (legacy - kept for backward compatibility)
 CHARL_USER_ID = 2
 AMIN_USER_ID = 9
 ADMIN_USER_IDS = {CHARL_USER_ID, AMIN_USER_ID}
 
 def require_charl(user_id: int = Depends(get_current_user_id)) -> int:
-    """Only allow admin users (Charl and Amin) to access admin endpoints"""
-    if user_id not in ADMIN_USER_IDS:
-        raise HTTPException(status_code=403, detail="Admin access restricted to authorized users only")
+    """Only allow admin users to access admin endpoints"""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT is_admin FROM pharma.users WHERE user_id = %s", (user_id,))
+        row = cur.fetchone()
+        if not row or not row['is_admin']:
+            raise HTTPException(status_code=403, detail="Admin access restricted to authorized users only")
     return user_id
 
 def require_admin_access(user_id: Optional[int] = Depends(require_admin_or_api_key)) -> Optional[int]:
@@ -56,6 +59,8 @@ class UserListItem(BaseModel):
     username: str
     email: str
     is_active: bool
+    is_admin: bool
+    is_accounting: bool
     created_at: str
     pharmacy_count: int
 
@@ -64,6 +69,8 @@ class UserDetail(BaseModel):
     username: str
     email: str
     is_active: bool
+    is_admin: bool
+    is_accounting: bool
     created_at: str
     pharmacies: List[dict]
 
@@ -78,6 +85,8 @@ class UserWithAccess(BaseModel):
     username: str
     email: str
     is_active: bool
+    is_admin: bool
+    is_accounting: bool
     created_at: str
     pharmacies: List[UserPharmacyAccessDetail]
 
@@ -87,11 +96,15 @@ class CreateUserRequest(BaseModel):
     password: str
     pharmacy_ids: Optional[List[int]] = None
     can_write: bool = False
+    is_admin: bool = False
+    is_accounting: bool = False
 
 class UpdateUserRequest(BaseModel):
     email: Optional[EmailStr] = None
     password: Optional[str] = None
     is_active: Optional[bool] = None
+    is_admin: Optional[bool] = None
+    is_accounting: Optional[bool] = None
 
 class GrantPharmacyAccessRequest(BaseModel):
     pharmacy_id: int
@@ -112,11 +125,13 @@ def list_users(user_id: Optional[int] = Depends(require_admin_access)):
                 u.username,
                 u.email,
                 u.is_active,
+                u.is_admin,
+                u.is_accounting,
                 u.created_at,
                 COUNT(up.pharmacy_id) as pharmacy_count
             FROM pharma.users u
             LEFT JOIN pharma.user_pharmacies up ON up.user_id = u.user_id
-            GROUP BY u.user_id, u.username, u.email, u.is_active, u.created_at
+            GROUP BY u.user_id, u.username, u.email, u.is_active, u.is_admin, u.is_accounting, u.created_at
             ORDER BY u.user_id
         """)
         
@@ -127,6 +142,8 @@ def list_users(user_id: Optional[int] = Depends(require_admin_access)):
                 username=row['username'],
                 email=row['email'],
                 is_active=row['is_active'],
+                is_admin=row['is_admin'],
+                is_accounting=row['is_accounting'],
                 created_at=row['created_at'].isoformat() if row['created_at'] else '',
                 pharmacy_count=row['pharmacy_count']
             ))
@@ -139,7 +156,7 @@ def get_all_users_with_access(user_id: Optional[int] = Depends(require_admin_acc
     with get_conn() as conn, conn.cursor() as cur:
         # Get all users
         cur.execute("""
-            SELECT user_id, username, email, is_active, created_at
+            SELECT user_id, username, email, is_active, is_admin, is_accounting, created_at
             FROM pharma.users
             ORDER BY user_id
         """)
@@ -175,6 +192,8 @@ def get_all_users_with_access(user_id: Optional[int] = Depends(require_admin_acc
                 username=user_row['username'],
                 email=user_row['email'],
                 is_active=user_row['is_active'],
+                is_admin=user_row['is_admin'],
+                is_accounting=user_row['is_accounting'],
                 created_at=user_row['created_at'].isoformat() if user_row['created_at'] else '',
                 pharmacies=pharmacies
             ))
@@ -187,7 +206,7 @@ def get_user(user_id_param: int, user_id: Optional[int] = Depends(require_admin_
     with get_conn() as conn, conn.cursor() as cur:
         # Get user info
         cur.execute("""
-            SELECT user_id, username, email, is_active, created_at
+            SELECT user_id, username, email, is_active, is_admin, is_accounting, created_at
             FROM pharma.users
             WHERE user_id = %s
         """, (user_id_param,))
@@ -223,6 +242,8 @@ def get_user(user_id_param: int, user_id: Optional[int] = Depends(require_admin_
             username=user_row['username'],
             email=user_row['email'],
             is_active=user_row['is_active'],
+            is_admin=user_row['is_admin'],
+            is_accounting=user_row['is_accounting'],
             created_at=user_row['created_at'].isoformat() if user_row['created_at'] else '',
             pharmacies=pharmacies
         )
@@ -242,12 +263,12 @@ def create_user(req: CreateUserRequest, user_id: Optional[int] = Depends(require
         if cur.fetchone():
             raise HTTPException(status_code=400, detail="Username or email already exists")
         
-        # Create user
+        # Create user with roles
         cur.execute("""
-            INSERT INTO pharma.users (username, email, password_hash, is_active)
-            VALUES (%s, %s, %s, true)
+            INSERT INTO pharma.users (username, email, password_hash, is_active, is_admin, is_accounting)
+            VALUES (%s, %s, %s, true, %s, %s)
             RETURNING user_id
-        """, (req.username, req.email, password_hash))
+        """, (req.username, req.email, password_hash, req.is_admin, req.is_accounting))
         
         new_user_id = cur.fetchone()['user_id']
         
@@ -269,7 +290,7 @@ def create_user(req: CreateUserRequest, user_id: Optional[int] = Depends(require
 
 @router.put("/users/{user_id_param}", response_model=UserDetail)
 def update_user(user_id_param: int, req: UpdateUserRequest, user_id: Optional[int] = Depends(require_admin_access)):
-    """Update user information (email, password, status)"""
+    """Update user information (email, password, status, roles)"""
     with get_conn() as conn, conn.cursor() as cur:
         # Check if user exists
         cur.execute("SELECT user_id FROM pharma.users WHERE user_id = %s", (user_id_param,))
@@ -297,6 +318,14 @@ def update_user(user_id_param: int, req: UpdateUserRequest, user_id: Optional[in
         if req.is_active is not None:
             updates.append("is_active = %s")
             params.append(req.is_active)
+        
+        if req.is_admin is not None:
+            updates.append("is_admin = %s")
+            params.append(req.is_admin)
+        
+        if req.is_accounting is not None:
+            updates.append("is_accounting = %s")
+            params.append(req.is_accounting)
         
         if not updates:
             raise HTTPException(status_code=400, detail="No fields to update")

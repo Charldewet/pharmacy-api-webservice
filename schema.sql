@@ -91,11 +91,10 @@ CREATE INDEX IF NOT EXISTS fact_daily_sales_mdate_idx
 CREATE OR REPLACE VIEW pharma.v_daily_sales AS
 SELECT
   f.*,
-  (turnover - cost_of_sales - COALESCE(type_r_sales,0))                          AS gp_value,
+  (turnover - cost_of_sales)                                                      AS gp_value,
   NULLIF((turnover - COALESCE(type_r_sales,0)),0)                                AS denom_excl_type_r,
-  CASE WHEN (turnover - COALESCE(type_r_sales,0)) > 0
-       THEN ROUND((turnover - cost_of_sales - COALESCE(type_r_sales,0))
-                  / (turnover - COALESCE(type_r_sales,0)) * 100, 2)
+  CASE WHEN turnover > 0
+       THEN ROUND((turnover - cost_of_sales) / turnover * 100, 2)
        ELSE NULL END                                                              AS gp_pct,
   (turnover - COALESCE(type_r_sales,0))                                          AS retail_excl_type_r,
   dispensary_turnover                                                            AS dispensary_excl_vat,
@@ -188,6 +187,8 @@ CREATE TABLE IF NOT EXISTS pharma.users (
   email         text NOT NULL UNIQUE,
   password_hash text NOT NULL,
   is_active     boolean NOT NULL DEFAULT true,
+  is_admin      boolean NOT NULL DEFAULT false,
+  is_accounting boolean NOT NULL DEFAULT false,
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 
